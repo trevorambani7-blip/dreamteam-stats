@@ -100,11 +100,13 @@ for name, pos in players_on_field:
     role = role_groups[pos]
     st.subheader(f"{name} ({role})")
     actions = actions_per_role[role]
-    col = st.columns(len(actions))
+    col = st.columns(min(len(actions), 4))  # max 4 columns per row
     for i, act in enumerate(actions):
-        if col[i % len(col)].button(f"{act}"):
-            st.session_state.stats[name][act]["Successful"] += 1  # default to Successful for tap
+        button_key = f"{name}_{act}_{i}"
+        if col[i % len(col)].button(f"{act}", key=button_key):
+            st.session_state.stats[name][act]["Successful"] += 1
             st.success(f"{name} → {act} logged!")
+
 
 # ------------------ DOWNLOAD CSV ------------------ #
 st.header("Match Summary / Download")
