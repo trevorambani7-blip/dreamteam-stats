@@ -15,12 +15,12 @@ if not st.session_state.logged_in:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if username == "dreamteam" and password == "1234567":
-            st.session_state.logged_in = True
-            st.success("Logged in successfully!")
-            st.experimental_rerun()
-        else:
-            st.error("Invalid credentials")
+    if username == "dreamteam" and password == "1234567":
+        st.session_state.logged_in = True
+        st.success("Logged in successfully! Please reload the app.")
+    else:
+        st.error("Invalid credentials")
+
     st.stop()  # stop app execution until login
 
 # -------------------- CONFIGURATION -------------------- #
