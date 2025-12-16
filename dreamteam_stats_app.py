@@ -14,7 +14,7 @@ if not st.session_state.logged_in:
     st.title("DreamTeam Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    if st.button("Login"):
+if st.button("Login"):
 if username == "dreamteam" and password == "1234567":
         st.session_state.logged_in = True
         st.success("Logged in successfully! Please reload the app.")
