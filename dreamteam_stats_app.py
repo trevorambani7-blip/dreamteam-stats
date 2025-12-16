@@ -20,7 +20,6 @@ if st.button("Login"):
         st.success("Logged in successfully! Please reload the app.")
     else:
         st.error("Invalid credentials")
-)
 
     st.stop()  # stop app execution until login
 
