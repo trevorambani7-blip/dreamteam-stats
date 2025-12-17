@@ -12,7 +12,7 @@ def load_css():
     with open("style.css") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-st.set_page_config(page_title="DreamTeam Stats Tracker", layout="wide")
+st.set_page_config(page_title="Takti Stats Tracker", layout="wide")
 load_css()
 
 import streamlit as st
@@ -22,7 +22,7 @@ import streamlit as st
 HASHED_PASSWORD = hashlib.sha256("1234567".encode()).hexdigest()
 
 def login():
-    st.title("DreamTeam Login")
+    st.title("Takti Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
