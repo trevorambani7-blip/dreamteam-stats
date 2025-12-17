@@ -258,4 +258,4 @@ else:
     team_data = team_sheet()
     formation_name, lineup = lineup_selection(team_data)
     stopwatch_and_actions(lineup)
-```
+
