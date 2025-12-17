@@ -6,10 +6,6 @@ from datetime import datetime
 from fpdf import FPDF
 import time
 import hashlib
-
-st.set_page_config(page_title="DreamTeam Stats Tracker", layout="wide")
-import streamlit as st
-
 # Inject Google Fonts and Custom CSS
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -110,6 +106,10 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+st.set_page_config(page_title="DreamTeam Stats Tracker", layout="wide")
+import streamlit as st
+
+
 # -------------------- LOGIN -------------------- #
 HASHED_PASSWORD = hashlib.sha256("1234567".encode()).hexdigest()
 
