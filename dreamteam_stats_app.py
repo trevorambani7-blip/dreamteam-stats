@@ -171,12 +171,13 @@ def lineup_selection(team_data):
         if not options:
             st.warning(f"No players assigned to {role} in team sheet.")
             options = [p["name"] for p in team_data["players"]]
-        player = st.selectbox(f"{role}", options=options, key=f"start_{i}")
-        if player in used_players:
-            st.error(f"{player} already selected!")
-        else:
-            used_players.add(player)
-            lineup[role] = player
+        player = st.selectbox(f"{role}", options=["—"] + options, key=f"start_{i}")
+        if player != "—":
+            if player in used_players:
+                st.error(f"{player} already selected!")
+            else:
+                used_players.add(player)
+                lineup[role] = player
 
     st.subheader("Substitutes (up to 15)")
     remaining = [p["name"] for p in team_data["players"] if p["name"] not in used_players]
@@ -187,20 +188,29 @@ def lineup_selection(team_data):
             subs.append(sub)
             remaining.remove(sub)
 
-    # Display lineup table
+    # Display lineup table (safe jersey lookup)
     st.write("### Starting XI")
     lineup_rows = []
-    for role, player in lineup.items():
-        jersey = next(p["jersey"] for p in team_data["players"] if p["name"] == player)
+    empty_count = 0
+    for role in slots:
+        player = lineup.get(role, "—")
+        if player == "—":
+            empty_count += 1
+            jersey = "—"
+        else:
+            jersey = next((p["jersey"] for p in team_data["players"] if p["name"] == player), "—")
         lineup_rows.append({"Position": role, "Name": player, "Jersey": jersey})
+    
+    if empty_count > 0:
+        st.warning(f"{empty_count} positions not selected. You can still proceed, but consider filling them.")
+    
     st.table(pd.DataFrame(lineup_rows))
 
     st.write("### Substitutes")
-    sub_rows = [{"Position": "SUB", "Name": s, "Jersey": next(p["jersey"] for p in team_data["players"] if p["name"] == s)} for s in subs]
-    st.table(pd.DataFrame(sub_rows or [{"Position": "SUB", "Name": "-", "Jersey": "-"}]))
+    sub_rows = [{"Position": "SUB", "Name": s, "Jersey": next((p["jersey"] for p in team_data["players"] if p["name"] == s), "—")} for s in subs]
+    st.table(pd.DataFrame(sub_rows or [{"Position": "SUB", "Name": "—", "Jersey": "—"}]))
 
     if st.button("Export Lineup PDF"):
-        # PDF export logic (same as before)
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", "B", 16)
@@ -337,6 +347,8 @@ else:
 
         st.subheader(f"Action Logging - {level} Level")
         for role, player in lineup.items():
+            if player == "—":  # Skip empty positions
+                continue
             with st.expander(f"**{player} ({role})**", expanded=True):
                 grouped_role = role_groups.get(role, "Central Midfielder")
                 actions = actions_dict.get("All", []) + actions_dict.get(grouped_role, [])
