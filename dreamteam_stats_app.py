@@ -1,1375 +1,785 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import json
 import os
-import time
-import hashlib
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime
 from fpdf import FPDF
+import hashlib
+from collections import defaultdict
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import base64
-from io import BytesIO
-from typing import Dict, List, Optional, Tuple
-import warnings
-warnings.filterwarnings('ignore')
 
 # -------------------- CONFIGURATION -------------------- #
-SESSION_TIMEOUT = 3600  # 1 hour session timeout
-TEAM_FILE = "team_data.json"
-MATCH_DATA_DIR = "match_data"
-BACKUP_DIR = "backups"
+st.set_page_config(page_title="Takti Stats Tracker", layout="wide", initial_sidebar_state="expanded")
 
-# Create necessary directories
-for directory in [MATCH_DATA_DIR, BACKUP_DIR]:
-    os.makedirs(directory, exist_ok=True)
-
-# -------------------- SECURITY -------------------- #
-def get_hashed_password():
-    """Get password from environment variable or use default (for demo)"""
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    password = os.getenv("APP_PASSWORD", "1234567")
-    return hashlib.sha256(password.encode()).hexdigest()
-
-HASHED_PASSWORD = get_hashed_password()
-
-def check_session_timeout():
-    """Check if session has timed out"""
-    if 'login_time' in st.session_state:
-        elapsed = time.time() - st.session_state.login_time
-        if elapsed > SESSION_TIMEOUT:
-            st.session_state.logged_in = False
-            st.session_state.login_time = None
-            st.error("Session expired. Please login again.")
-            st.rerun()
-    return True
-
-# -------------------- CUSTOM CSS -------------------- #
-def load_custom_css():
-    """Load enhanced CSS with better styling"""
-    custom_css = """
+# Custom CSS
+def load_css():
+    css = """
     <style>
-    /* Main styles */
-    .main {
-        padding: 1rem;
-    }
-    
-    /* Header styles */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        background-color: #f0f2f6;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        padding: 10px 20px;
-        border-radius: 5px 5px 0 0;
-    }
-    
-    /* Card styling */
-    .card {
-        background-color: white;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    }
-    
-    /* Timer styling */
-    .timer-container {
-        text-align: center;
-        padding: 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 15px;
-        color: white;
-        margin: 20px 0;
-    }
-    
+    .main {background-color: #f0f2f6;}
+    .stButton>button {width: 100%; border-radius: 5px; height: 3em;}
+    .success-btn {background-color: #28a745; color: white;}
+    .warning-btn {background-color: #ffc107; color: black;}
     .timer-display {
-        font-size: 4rem;
+        font-size: 4em;
         font-weight: bold;
-        font-family: monospace;
-        margin: 10px 0;
-    }
-    
-    .period-display {
-        font-size: 1.5rem;
-        opacity: 0.9;
-    }
-    
-    /* Button styling */
-    .stButton button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-    
-    /* Metric cards */
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
         text-align: center;
-    }
-    
-    /* Player card */
-    .player-card {
-        background: #f8f9fa;
-        border-left: 4px solid #667eea;
-        padding: 15px;
-        margin: 10px 0;
-        border-radius: 5px;
-    }
-    
-    /* Success/Error messages */
-    .stSuccess {
-        border-radius: 10px;
-        padding: 15px;
-    }
-    
-    .stError {
-        border-radius: 10px;
-        padding: 15px;
-    }
-    
-    /* Formation visualization */
-    .formation-grid {
-        display: grid;
-        gap: 10px;
         padding: 20px;
-        background: #f0f2f6;
         border-radius: 10px;
         margin: 20px 0;
     }
-    
-    /* Action button styling */
-    .action-button {
-        margin: 5px 0;
-        width: 100%;
+    .timer-running {background-color: #d4edda; color: #155724;}
+    .timer-paused {background-color: #fff3cd; color: #856404;}
+    .stat-card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 10px 0;
     }
-    
-    /* Responsive design */
-    @media (max-width: 768px) {
-        .timer-display {
-            font-size: 3rem;
-        }
+    .player-card {
+        background-color: #ffffff;
+        border-left: 4px solid #007bff;
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 5px;
     }
     </style>
     """
-    st.markdown(custom_css, unsafe_allow_html=True)
+    st.markdown(css, unsafe_allow_html=True)
 
-# -------------------- INITIALIZATION -------------------- #
-def initialize_session_state():
-    """Initialize all session state variables"""
-    defaults = {
-        'logged_in': False,
-        'login_time': None,
-        'team_data': {'coach': '', 'assistant': '', 'players': []},
-        'lineup': {},
-        'substitutes': [],
-        'match_ready': False,
-        'match_level': 'Beginner',
-        'game_duration': 90,
-        'halftime_duration': 15,
-        'match_started': False,
-        'match_paused': False,
-        'elapsed_time': 0,
-        'start_time': None,
-        'stats': [],
-        'first_half_stats': [],
-        'second_half_stats': [],
-        'formation': '4-4-2',
-        'current_half': 1,
-        'selected_player': 'All Players',
-        'action_history': [],
-        'match_notes': '',
-        'opponent_team': '',
-        'match_location': '',
-        'weather_conditions': 'Sunny',
-        'undo_stack': [],
-        'redo_stack': [],
-        'cached_actions': get_actions_per_level()
-    }
-    
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+load_css()
 
-# -------------------- ENHANCED LOGIN -------------------- #
-def login_page():
-    """Enhanced login page with better UX"""
-    st.title("⚽ Takti Stats Tracker")
-    st.markdown("---")
-    
-    with st.container():
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            with st.form("login_form", clear_on_submit=True):
-                st.subheader("Login")
-                
-                username = st.text_input("👤 Username", placeholder="Enter your username")
-                password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
-                
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    login_btn = st.form_submit_button("🚀 Login", use_container_width=True)
-                with col_b:
-                    demo_btn = st.form_submit_button("🎮 Demo Mode", use_container_width=True)
-                
-                if login_btn:
-                    if username.strip() and password.strip():
-                        hashed_input = hashlib.sha256(password.encode()).hexdigest()
-                        if username == "dreamteam" and hashed_input == HASHED_PASSWORD:
-                            st.session_state.logged_in = True
-                            st.session_state.login_time = time.time()
-                            st.success("✅ Login successful! Redirecting...")
-                            time.sleep(0.5)
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid username or password")
-                    else:
-                        st.warning("⚠️ Please enter both username and password")
-                
-                if demo_btn:
-                    st.session_state.logged_in = True
-                    st.session_state.login_time = time.time()
-                    st.session_state.demo_mode = True
-                    st.success("🎮 Entering demo mode...")
-                    time.sleep(0.5)
-                    st.rerun()
-            
-            st.markdown("---")
-            st.caption("Default credentials: username: `dreamteam`, password: `1234567`")
-            st.caption("⚠️ For production use, set APP_PASSWORD in .env file")
+# -------------------- DATA FILES -------------------- #
+TEAM_FILE = "team_data.json"
+MATCHES_DIR = "matches"
+HASHED_PASSWORD = hashlib.sha256("1234567".encode()).hexdigest()
 
-# -------------------- ENHANCED TEAM SHEET -------------------- #
-def validate_team_data(team_data: Dict) -> Tuple[bool, List[str]]:
-    """Validate team data with comprehensive checks"""
-    errors = []
-    
-    # Check required fields
-    if not team_data.get('coach', '').strip():
-        errors.append("Coach name is required")
-    
-    # Check players
-    players = team_data.get('players', [])
-    if len(players) < 11:
-        errors.append(f"Need at least 11 players (currently {len(players)})")
-    
-    # Check for duplicate jerseys
-    jerseys = []
-    for i, player in enumerate(players):
-        if not player.get('name', '').strip():
-            errors.append(f"Player {i+1}: Name is required")
-        
-        jersey = player.get('jersey', '').strip()
-        if jersey:
-            if jersey in jerseys:
-                errors.append(f"Jersey #{jersey} is duplicated")
-            jerseys.append(jersey)
-    
-    return len(errors) == 0, errors
+# Create matches directory if it doesn't exist
+if not os.path.exists(MATCHES_DIR):
+    os.makedirs(MATCHES_DIR)
 
-def save_team_backup(team_data: Dict):
-    """Create backup of team data"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = os.path.join(BACKUP_DIR, f"team_backup_{timestamp}.json")
+# -------------------- UTILITY FUNCTIONS -------------------- #
+def load_team():
+    """Load team data with error handling"""
+    if os.path.exists(TEAM_FILE):
+        try:
+            with open(TEAM_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"Error loading team file: {e}")
+            return {"coach": "", "assistant": "", "players": []}
+    return {"coach": "", "assistant": "", "players": []}
+
+def save_team(team_data):
+    """Save team data with error handling"""
     try:
-        with open(backup_file, 'w') as f:
+        with open(TEAM_FILE, "w") as f:
             json.dump(team_data, f, indent=2)
         return True
     except Exception as e:
-        st.error(f"Backup failed: {e}")
+        st.error(f"Error saving team file: {e}")
         return False
 
-def team_sheet_page():
-    """Enhanced team sheet management"""
-    st.header("👥 Team Sheet Management")
+def save_match_data(match_data):
+    """Save match data to a timestamped file"""
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{MATCHES_DIR}/match_{timestamp}.json"
+        with open(filename, "w") as f:
+            json.dump(match_data, f, indent=2)
+        return filename
+    except Exception as e:
+        st.error(f"Error saving match: {e}")
+        return None
+
+def load_all_matches():
+    """Load all saved matches"""
+    matches = []
+    if os.path.exists(MATCHES_DIR):
+        for filename in sorted(os.listdir(MATCHES_DIR), reverse=True):
+            if filename.endswith(".json"):
+                try:
+                    with open(os.path.join(MATCHES_DIR, filename), "r") as f:
+                        match_data = json.load(f)
+                        match_data["filename"] = filename
+                        matches.append(match_data)
+                except Exception as e:
+                    st.warning(f"Error loading {filename}: {e}")
+    return matches
+
+# -------------------- FORMATIONS & ACTIONS -------------------- #
+formations = {
+    "4-4-2": ["GK","LB","CB","CB","RB","LM","CM","CM","RM","ST","ST"],
+    "4-3-3": ["GK","LB","CB","CB","RB","CM","CM","CM","LW","ST","RW"],
+    "4-2-3-1": ["GK","LB","CB","CB","RB","CDM","CDM","CAM","LW","ST","RW"],
+    "3-5-2": ["GK","CB","CB","CB","LM","CM","CM","RM","CAM","ST","ST"],
+    "4-5-1": ["GK","LB","CB","CB","RB","LM","CM","CM","CM","RM","ST"],
+    "3-4-3": ["GK","CB","CB","CB","LM","CM","CM","RM","LW","ST","RW"],
+}
+
+role_groups = {
+    'GK':'Goalkeeper','CB':'Centre-Back','RCB':'Centre-Back','LCB':'Centre-Back',
+    'RB':'Full-Back','LB':'Full-Back','WB':'Full-Back','RWB':'Full-Back','LWB':'Full-Back',
+    'DM':'Defensive Midfielder','CDM':'Defensive Midfielder',
+    'CM':'Central Midfielder','AM':'Attacking Midfielder','CAM':'Attacking Midfielder',
+    'RM':'Winger','LM':'Winger','WM':'Winger','RW':'Winger','LW':'Winger',
+    'ST':'Striker','CF':'Striker','SS':'Striker','WF':'Striker'
+}
+
+def get_actions_per_level():
+    return {
+        "Beginner": {
+            "All": ["Pass", "Dribble", "Tackle", "Shot"],
+            "Goalkeeper": ["Save", "Catch", "Punch"],
+            "Centre-Back": ["Clearance", "Header", "Block"],
+            "Full-Back": ["Cross", "Overlap"],
+            "Defensive Midfielder": ["Interception", "Recovery"],
+            "Central Midfielder": ["Key Pass", "Long Ball"],
+            "Attacking Midfielder": ["Through Ball", "Assist"],
+            "Winger": ["Cross", "Cut Inside", "1v1"],
+            "Striker": ["Shot", "Header", "Hold Up"]
+        },
+        "Intermediate": {
+            "All": ["Pass", "Dribble", "Tackle", "Shot", "Foul", "Yellow Card", "Red Card"],
+            "Goalkeeper": ["Save", "Catch", "Punch", "Long Kick", "Distribution"],
+            "Centre-Back": ["Clearance", "Interception", "Aerial Duel", "Tackle"],
+            "Full-Back": ["Cross", "Overlap", "Tackle", "Recovery Run"],
+            "Defensive Midfielder": ["Interception", "Tackle", "Forward Pass", "Ball Recovery"],
+            "Central Midfielder": ["Key Pass", "Long Ball", "Dribble", "Shot"],
+            "Attacking Midfielder": ["Through Ball", "Assist", "Shot", "Dribble"],
+            "Winger": ["Cross", "Shot", "Dribble", "Pressing"],
+            "Striker": ["Shot", "Header", "Hold Up", "Pressing", "Assist"]
+        },
+        "Semi-Pro": {
+            "All": ["Pass", "Progressive Pass", "Dribble", "Tackle", "Shot", "Foul", "Card"],
+            "Goalkeeper": ["Save", "Claim Cross", "Sweeper Action", "Distribution", "Long Pass"],
+            "Centre-Back": ["Progressive Pass", "Aerial Duel", "Tackle", "Block", "Clearance"],
+            "Full-Back": ["Cross", "Progressive Run", "Tackle", "Overlap", "Recovery"],
+            "Defensive Midfielder": ["Ball Recovery", "Tackle", "Progressive Pass", "Interception"],
+            "Central Midfielder": ["Key Pass", "Progressive Pass", "Dribble", "Shot", "Assist"],
+            "Attacking Midfielder": ["Chance Created", "Shot", "Assist", "Dribble", "Key Pass"],
+            "Winger": ["Shot", "Dribble", "Cross", "Pressing", "Touch in Box"],
+            "Striker": ["Shot", "Touch in Box", "Pressing", "Assist", "Offside"]
+        },
+        "Pro": {
+            "All": ["Pass", "Progressive Action", "Dribble", "Tackle", "Shot", "Pressing"],
+            "Goalkeeper": ["Save", "xG Prevented", "Sweeper Action", "Progressive Distribution"],
+            "Centre-Back": ["Line Breaking Pass", "Progressive Carry", "Defensive Action", "Aerial Duel"],
+            "Full-Back": ["Progressive Run", "Cross into Danger", "Defensive Recovery", "Assist"],
+            "Defensive Midfielder": ["Progressive Pass", "Progressive Carry", "Pass Under Pressure", "Ball Recovery"],
+            "Central Midfielder": ["Progressive Pass", "Key Pass", "xA Action", "Dribble", "Shot"],
+            "Attacking Midfielder": ["Chance Created", "xA Action", "Progressive Action", "Shot"],
+            "Winger": ["Shot", "xG Action", "Dribble", "Pressing", "Off-ball Run"],
+            "Striker": ["Shot", "xG Action", "Pressing", "Touch in Box", "Assist"]
+        }
+    }
+
+# -------------------- LOGIN -------------------- #
+def login():
+    st.title("⚽ Takti Stats Tracker")
+    st.markdown("### Professional Football Statistics Management")
     
-    # Initialize
-    if 'team_data' not in st.session_state:
-        st.session_state.team_data = load_team_data()
-    
-    team_data = st.session_state.team_data.copy()
-    
-    # Main form
-    with st.form("team_sheet_form"):
-        # Coach information
-        col1, col2 = st.columns(2)
-        with col1:
-            team_data['coach'] = st.text_input(
-                "Head Coach",
-                value=team_data.get('coach', ''),
-                help="Enter the name of the head coach"
-            )
-        with col2:
-            team_data['assistant'] = st.text_input(
-                "Assistant Coach",
-                value=team_data.get('assistant', ''),
-                help="Enter the name of the assistant coach"
-            )
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("---")
+        username = st.text_input("Username", placeholder="Enter username")
+        password = st.text_input("Password", type="password", placeholder="Enter password")
+        
+        if st.button("🔐 Login", use_container_width=True):
+            hashed_input = hashlib.sha256(password.encode()).hexdigest()
+            if username == "dreamteam" and hashed_input == HASHED_PASSWORD:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("❌ Invalid credentials")
         
         st.markdown("---")
-        
-        # Squad size selection
-        st.subheader("Squad Configuration")
-        current_size = len(team_data.get('players', []))
-        squad_size = st.slider(
-            "Squad Size",
-            min_value=11,
-            max_value=30,
-            value=max(18, current_size),
-            help="Select total number of players in the squad"
-        )
-        
-        # Positions with emojis for better visualization
-        positions = {
-            'GK': '🧤 Goalkeeper',
-            'CB': '🛡️ Centre-Back',
-            'RCB': '🛡️ Right Centre-Back',
-            'LCB': '🛡️ Left Centre-Back',
-            'RB': '🏃 Right-Back',
-            'LB': '🏃 Left-Back',
-            'WB': '🏃 Wing-Back',
-            'RWB': '🏃 Right Wing-Back',
-            'LWB': '🏃 Left Wing-Back',
-            'DM': '🛡️ Defensive Midfielder',
-            'CDM': '🛡️ Central Defensive Midfielder',
-            'CM': '⚙️ Central Midfielder',
-            'AM': '🎯 Attacking Midfielder',
-            'CAM': '🎯 Central Attacking Midfielder',
-            'RM': '🚀 Right Midfielder',
-            'LM': '🚀 Left Midfielder',
-            'WM': '🚀 Winger',
-            'RW': '🚀 Right Winger',
-            'LW': '🚀 Left Winger',
-            'ST': '⚽ Striker',
-            'CF': '⚽ Centre Forward',
-            'SS': '⚽ Second Striker',
-            'WF': '⚽ Wide Forward'
-        }
-        
-        # Player entries
-        st.subheader("Player Roster")
-        team_data['players'] = []
-        used_jerseys = set()
-        
-        for i in range(squad_size):
-            with st.expander(f"Player {i+1}", expanded=(i < 5)):
-                col1, col2, col3 = st.columns([3, 1, 2])
-                
-                with col1:
-                    name = st.text_input(
-                        "Full Name",
-                        value=team_data.get('players', [{}])[i].get('name', '') if i < len(team_data.get('players', [])) else '',
-                        key=f"name_{i}",
-                        placeholder="Enter player's full name"
-                    )
-                
-                with col2:
-                    jersey = st.text_input(
-                        "Jersey #",
-                        value=team_data.get('players', [{}])[i].get('jersey', '') if i < len(team_data.get('players', [])) else '',
-                        key=f"jersey_{i}",
-                        placeholder="#",
-                        max_chars=3
-                    )
-                    
-                    if jersey and jersey in used_jerseys:
-                        st.error(f"#{jersey} already used")
-                    elif jersey:
+        st.info("💡 Default credentials: dreamteam / 1234567")
+
+# -------------------- TEAM SHEET -------------------- #
+def team_sheet():
+    st.header("📋 Team Sheet Management")
+    team_data = load_team()
+    
+    st.info("Configure your full squad below. Jersey numbers must be unique and numeric.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        team_data["coach"] = st.text_input("👔 Coach Name", value=team_data.get("coach", ""))
+    with col2:
+        team_data["assistant"] = st.text_input("👔 Assistant Coach Name", value=team_data.get("assistant", ""))
+    
+    st.markdown("---")
+    num_players = st.number_input("Total Squad Size", min_value=11, max_value=30, value=len(team_data.get("players", [])) or 18)
+    
+    positions = ['GK','CB','RCB','LCB','RB','LB','WB','RWB','LWB','DM','CDM','CM','AM','CAM','RM','LM','WM','RW','LW','ST','CF','SS','WF']
+    
+    # Load existing players
+    existing_players = team_data.get("players", [])
+    new_players = []
+    used_jerseys = set()
+    used_names = set()
+    
+    st.subheader("Player Roster")
+    
+    for i in range(num_players):
+        with st.expander(f"Player {i+1}", expanded=(i < 11)):
+            col1, col2, col3 = st.columns([3, 1, 2])
+            
+            # Pre-fill with existing data if available
+            existing = existing_players[i] if i < len(existing_players) else {}
+            
+            with col1:
+                name = st.text_input("Name", value=existing.get("name", ""), key=f"name_{i}", placeholder="Player name")
+            with col2:
+                jersey = st.text_input("Jersey #", value=existing.get("jersey", ""), key=f"jersey_{i}", placeholder="##")
+            with col3:
+                pos_index = positions.index(existing.get("position", "CM")) if existing.get("position") in positions else positions.index("CM")
+                pos = st.selectbox("Position", options=positions, index=pos_index, key=f"pos_{i}")
+            
+            # Validation
+            errors = []
+            if name.strip():
+                if jersey:
+                    if not jersey.isdigit():
+                        errors.append("Jersey must be numeric")
+                    elif jersey in used_jerseys:
+                        errors.append(f"Jersey {jersey} already assigned")
+                    else:
                         used_jerseys.add(jersey)
+                else:
+                    errors.append("Jersey number required")
                 
-                with col3:
-                    pos_options = list(positions.keys())
-                    default_pos = team_data.get('players', [{}])[i].get('position', 'CM') if i < len(team_data.get('players', [])) else 'CM'
-                    default_idx = pos_options.index(default_pos) if default_pos in pos_options else 0
-                    
-                    pos = st.selectbox(
-                        "Position",
-                        options=pos_options,
-                        format_func=lambda x: positions[x],
-                        index=default_idx,
-                        key=f"pos_{i}"
-                    )
+                if name in used_names:
+                    errors.append(f"Player name already used")
+                else:
+                    used_names.add(name)
                 
-                # Additional player info
-                col4, col5 = st.columns(2)
-                with col4:
-                    age = st.number_input(
-                        "Age",
-                        min_value=6,
-                        max_value=50,
-                        value=team_data.get('players', [{}])[i].get('age', 16) if i < len(team_data.get('players', [])) else 16,
-                        key=f"age_{i}"
-                    )
-                
-                with col5:
-                    foot = st.selectbox(
-                        "Preferred Foot",
-                        options=["Right", "Left", "Both"],
-                        index=["Right", "Left", "Both"].index(
-                            team_data.get('players', [{}])[i].get('foot', 'Right') if i < len(team_data.get('players', [])) else 'Right'
-                        ),
-                        key=f"foot_{i}"
-                    )
-                
-                if name.strip():
-                    player_data = {
-                        'name': name.strip(),
-                        'jersey': jersey.strip(),
-                        'position': pos,
-                        'age': age,
-                        'foot': foot,
-                        'id': f"p_{i}_{hashlib.md5(name.strip().encode()).hexdigest()[:8]}"
-                    }
-                    team_data['players'].append(player_data)
+                if errors:
+                    st.error(" | ".join(errors))
+                else:
+                    new_players.append({"name": name, "jersey": jersey, "position": pos})
+    
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        if st.button("💾 Save Team Sheet", use_container_width=True, type="primary"):
+            if len(new_players) < 11:
+                st.error("❌ You need at least 11 players!")
+            elif len(used_jerseys) != len(new_players):
+                st.error("❌ Fix duplicate or missing jerseys before saving.")
+            else:
+                team_data["players"] = new_players
+                if save_team(team_data):
+                    st.success("✅ Team sheet saved successfully!")
+                    st.session_state.team_data = team_data
+                    st.rerun()
+    
+    with col2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+    
+    with col3:
+        if len(new_players) > 0:
+            df = pd.DataFrame(new_players)
+            csv = df.to_csv(index=False)
+            st.download_button("📥 Export CSV", csv, "team_roster.csv", "text/csv", use_container_width=True)
+    
+    # Display current squad
+    if new_players:
+        st.markdown("---")
+        st.subheader("Current Squad Overview")
+        df = pd.DataFrame(new_players)
+        st.dataframe(df, use_container_width=True)
         
-        # Form submission
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            save_btn = st.form_submit_button("💾 Save Team Sheet", use_container_width=True)
-        with col2:
-            reset_btn = st.form_submit_button("🔄 Reset to Default", use_container_width=True)
-        with col3:
-            load_btn = st.form_submit_button("📂 Load from Backup", use_container_width=True)
-    
-    # Button actions
-    if save_btn:
-        is_valid, errors = validate_team_data(team_data)
-        if not is_valid:
-            for error in errors:
-                st.error(error)
-        else:
-            # Create backup before saving
-            if save_team_backup(team_data):
-                save_team_data(team_data)
-                st.session_state.team_data = team_data
-                st.success("✅ Team sheet saved successfully!")
-                st.balloons()
-    
-    elif reset_btn:
-        st.session_state.team_data = {'coach': '', 'assistant': '', 'players': []}
-        st.rerun()
-    
-    elif load_btn:
-        load_backup_interface()
-    
-    # Display summary
-    if team_data.get('players'):
-        display_team_summary(team_data)
+        # Position distribution
+        pos_counts = df['position'].value_counts()
+        fig = px.bar(x=pos_counts.index, y=pos_counts.values, 
+                     labels={'x': 'Position', 'y': 'Count'},
+                     title="Squad Distribution by Position")
+        st.plotly_chart(fig, use_container_width=True)
     
     return team_data
 
-def display_team_summary(team_data: Dict):
-    """Display team summary with visualization"""
-    st.markdown("---")
-    st.subheader("📊 Team Summary")
+# -------------------- LINEUP SELECTION -------------------- #
+def lineup_selection(team_data):
+    st.header("📝 Match Lineup Selection")
     
-    players_df = pd.DataFrame(team_data['players'])
-    
-    if not players_df.empty:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Players", len(players_df))
-        with col2:
-            avg_age = players_df['age'].mean() if 'age' in players_df.columns else 'N/A'
-            st.metric("Average Age", f"{avg_age:.1f}" if isinstance(avg_age, (int, float)) else avg_age)
-        with col3:
-            right_footed = sum(1 for p in team_data['players'] if p.get('foot') == 'Right')
-            st.metric("Right Footed", right_footed)
-        with col4:
-            positions_count = len(set(p['position'] for p in team_data['players']))
-            st.metric("Positions", positions_count)
-        
-        # Position distribution chart
-        if 'position' in players_df.columns:
-            fig = px.pie(
-                players_df,
-                names='position',
-                title='Position Distribution',
-                color_discrete_sequence=px.colors.qualitative.Set3
-            )
-            fig.update_layout(showlegend=True, height=300)
-            st.plotly_chart(fig, use_container_width=True)
-
-# -------------------- ENHANCED FORMATIONS -------------------- #
-def get_formations_with_visuals() -> Dict:
-    """Get formations with visual representations"""
-    formations = {
-        "4-4-2": {
-            "positions": ["GK", "LB", "CB", "CB", "RB", "LM", "CM", "CM", "RM", "ST", "ST"],
-            "description": "Balanced formation with two strikers",
-            "emoji": "⚖️"
-        },
-        "4-3-3": {
-            "positions": ["GK", "LB", "CB", "CB", "RB", "CM", "CM", "CM", "LW", "ST", "RW"],
-            "description": "Attacking formation with wingers",
-            "emoji": "⚡"
-        },
-        "4-2-3-1": {
-            "positions": ["GK", "LB", "CB", "CB", "RB", "CDM", "CDM", "CAM", "LW", "ST", "RW"],
-            "description": "Modern formation with attacking midfield",
-            "emoji": "🎯"
-        },
-        "3-5-2": {
-            "positions": ["GK", "CB", "CB", "CB", "LM", "CM", "CM", "RM", "CAM", "ST", "ST"],
-            "description": "Midfield dominance with three centre-backs",
-            "emoji": "🛡️"
-        },
-        "4-5-1": {
-            "positions": ["GK", "LB", "CB", "CB", "RB", "LM", "CM", "CM", "CM", "RM", "ST"],
-            "description": "Defensive formation packing midfield",
-            "emoji": "🔒"
-        },
-        "3-4-3": {
-            "positions": ["GK", "CB", "CB", "CB", "LM", "CM", "CM", "RM", "LW", "ST", "RW"],
-            "description": "Very attacking with three forwards",
-            "emoji": "🔥"
-        }
-    }
-    return formations
-
-def visualize_formation(formation_name: str, lineup: Dict):
-    """Create visual formation diagram"""
-    formation = get_formations_with_visuals()[formation_name]
-    positions = formation["positions"]
-    
-    # Create a football pitch visualization
-    fig = go.Figure()
-    
-    # Add pitch background
-    fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, 
-                  line=dict(color="green", width=2), fillcolor="lightgreen")
-    
-    # Position mapping to coordinates
-    position_coords = {
-        "GK": (50, 10),
-        "CB": [(35, 30), (65, 30)],
-        "LCB": (30, 30),
-        "RCB": (70, 30),
-        "LB": (20, 40),
-        "RB": (80, 40),
-        "LWB": (15, 50),
-        "RWB": (85, 50),
-        "DM": [(40, 50), (60, 50)],
-        "CDM": [(45, 45), (55, 45)],
-        "CM": [(40, 60), (60, 60)],
-        "LM": (20, 70),
-        "RM": (80, 70),
-        "CAM": (50, 70),
-        "LW": (20, 85),
-        "RW": (80, 85),
-        "ST": (50, 85),
-        "CF": (50, 80),
-        "SS": (50, 75)
-    }
-    
-    # Plot players
-    player_x = []
-    player_y = []
-    player_names = []
-    
-    for pos in positions:
-        if pos in lineup and lineup[pos] != "—":
-            if pos in position_coords:
-                coords = position_coords[pos]
-                if isinstance(coords[0], (list, tuple)) and isinstance(coords[0][0], (int, float)):
-                    # Multiple positions
-                    for coord in coords:
-                        player_x.append(coord[0])
-                        player_y.append(coord[1])
-                        player_names.append(lineup[pos])
-                else:
-                    player_x.append(coords[0])
-                    player_y.append(coords[1])
-                    player_names.append(lineup[pos])
-    
-    fig.add_trace(go.Scatter(
-        x=player_x, y=player_y,
-        mode='markers+text',
-        marker=dict(size=20, color='blue'),
-        text=player_names,
-        textposition="top center"
-    ))
-    
-    fig.update_layout(
-        title=f"{formation_name} Formation",
-        xaxis=dict(showgrid=False, zeroline=False, visible=False),
-        yaxis=dict(showgrid=False, zeroline=False, visible=False),
-        height=400,
-        showlegend=False
-    )
-    
-    return fig
-
-# -------------------- ENHANCED LINEUP SELECTION -------------------- #
-def lineup_selection_page():
-    """Enhanced lineup selection with visualization"""
-    st.header("🎯 Lineup Selection")
-    
-    if 'team_data' not in st.session_state or not st.session_state.team_data.get('players'):
+    if not team_data.get("players"):
         st.warning("⚠️ Please complete Team Sheet first.")
-        return {}
+        return None
     
-    team_data = st.session_state.team_data
-    formations = get_formations_with_visuals()
-    
-    # Formation selection with preview
     col1, col2 = st.columns([2, 1])
     with col1:
-        formation_options = {f"{v['emoji']} {k}": k for k, v in formations.items()}
-        selected_form = st.selectbox(
-            "Select Formation",
-            options=list(formation_options.keys()),
-            help="Choose your tactical formation"
-        )
-        formation_name = formation_options[selected_form]
-        st.session_state.formation = formation_name
-    
+        formation = st.selectbox("⚽ Formation", options=list(formations.keys()))
     with col2:
-        st.metric("Formation", formation_name)
-        st.caption(formations[formation_name]["description"])
+        opponent = st.text_input("🆚 Opponent", placeholder="Opposition team")
     
-    # Visual formation preview
-    with st.expander("📐 Formation Preview", expanded=True):
-        fig = visualize_formation(formation_name, {})
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Starting lineup selection
-    st.subheader("🏁 Starting XI")
-    slots = formations[formation_name]["positions"]
+    slots = formations[formation]
     
     # Group players by position
     players_by_pos = defaultdict(list)
-    for player in team_data['players']:
-        pos = player['position']
-        players_by_pos[pos].append((player['name'], player['jersey']))
+    for p in team_data["players"]:
+        players_by_pos[p["position"]].append(p)
     
-    # Starting lineup selection
+    # All players for fallback
+    all_players = [p["name"] for p in team_data["players"]]
+    
+    st.markdown("---")
+    st.subheader("Starting XI")
+    
     lineup = {}
     used_players = set()
     
+    # Group positions for better UX
     cols = st.columns(3)
-    col_idx = 0
-    
     for i, role in enumerate(slots):
-        col = cols[col_idx]
+        col = cols[i % 3]
+        
+        # Get players for this position + fallback
+        pos_options = [p["name"] for p in players_by_pos.get(role, [])]
+        if not pos_options:
+            pos_options = all_players.copy()
+        
+        # Remove already used players
+        available = [p for p in pos_options if p not in used_players]
+        
         with col:
-            # Find suitable players
-            suitable_players = []
-            for player in team_data['players']:
-                if player['name'] not in used_players:
-                    if player['position'] == role or role in player['position']:
-                        suitable_players.append(f"{player['name']} (#{player['jersey']})")
-            
-            if not suitable_players:
-                suitable_players = [f"{p['name']} (#{p['jersey']})" 
-                                   for p in team_data['players'] 
-                                   if p['name'] not in used_players]
-            
-            # Add "—" option
-            options = ["—"] + suitable_players
-            
-            # Get current selection
-            current_val = lineup.get(role, "—")
-            if current_val != "—":
-                current_display = f"{current_val} (#{next(p['jersey'] for p in team_data['players'] if p['name'] == current_val)})"
-                if current_display not in options:
-                    options.insert(0, current_display)
-            
-            # Selectbox
-            selected = st.selectbox(
-                f"{role}",
-                options=options,
+            player = st.selectbox(
+                f"{role}", 
+                options=["—"] + available,
                 key=f"start_{i}",
                 help=f"Select player for {role} position"
             )
             
-            if selected != "—":
-                player_name = selected.split(" (")[0]
-                if player_name in used_players:
-                    st.error(f"⚠️ {player_name} already selected!")
+            if player != "—":
+                if player in used_players:
+                    st.error(f"❌ {player} already selected!")
                 else:
-                    used_players.add(player_name)
-                    lineup[role] = player_name
-        
-        col_idx = (col_idx + 1) % 3
+                    used_players.add(player)
+                    lineup[role] = player
     
-    # Substitutes
-    st.subheader("🔄 Substitutes")
-    remaining_players = [p for p in team_data['players'] if p['name'] not in used_players]
-    
-    if 'substitutes' not in st.session_state:
-        st.session_state.substitutes = []
-    
-    num_subs = st.slider("Number of Substitutes", 0, 15, min(7, len(remaining_players)))
-    
-    subs = []
-    for i in range(num_subs):
-        sub_options = ["—"] + [f"{p['name']} (#{p['jersey']})" for p in remaining_players if f"{p['name']} (#{p['jersey']})" not in subs]
-        
-        selected_sub = st.selectbox(
-            f"Substitute {i+1}",
-            options=sub_options,
-            key=f"sub_{i}"
-        )
-        
-        if selected_sub != "—":
-            player_name = selected_sub.split(" (")[0]
-            subs.append(player_name)
-            st.session_state.substitutes = subs
-    
-    # Display lineup summary
     st.markdown("---")
-    st.subheader("📋 Lineup Summary")
+    st.subheader("Substitutes Bench")
+    
+    remaining_players = [p for p in all_players if p not in used_players]
+    subs = []
+    
+    cols = st.columns(5)
+    for i in range(15):
+        col = cols[i % 5]
+        with col:
+            sub = st.selectbox(
+                f"Sub {i+1}", 
+                options=["—"] + [p for p in remaining_players if p not in subs],
+                key=f"sub_{i}"
+            )
+            if sub != "—":
+                subs.append(sub)
+    
+    # Lineup summary
+    st.markdown("---")
+    st.subheader("Lineup Summary")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.write("**Starting XI**")
-        for role, player in lineup.items():
+        st.markdown("**Starting XI**")
+        lineup_rows = []
+        for role in slots:
+            player = lineup.get(role, "—")
             if player != "—":
-                jersey = next((p['jersey'] for p in team_data['players'] if p['name'] == player), "—")
-                st.write(f"• {role}: {player} (#{jersey})")
+                player_data = next((p for p in team_data["players"] if p["name"] == player), None)
+                jersey = player_data["jersey"] if player_data else "—"
+            else:
+                jersey = "—"
+            lineup_rows.append({"Position": role, "Player": player, "Jersey": jersey})
+        
+        st.dataframe(pd.DataFrame(lineup_rows), use_container_width=True, hide_index=True)
     
     with col2:
-        st.write("**Substitutes**")
-        for sub in st.session_state.substitutes:
-            if sub != "—":
-                jersey = next((p['jersey'] for p in team_data['players'] if p['name'] == sub), "—")
-                st.write(f"• {sub} (#{jersey})")
+        st.markdown("**Substitutes**")
+        sub_rows = []
+        for s in subs:
+            player_data = next((p for p in team_data["players"] if p["name"] == s), None)
+            jersey = player_data["jersey"] if player_data else "—"
+            sub_rows.append({"Player": s, "Jersey": jersey})
+        
+        if sub_rows:
+            st.dataframe(pd.DataFrame(sub_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No substitutes selected")
     
     # Export options
+    st.markdown("---")
     col1, col2, col3 = st.columns(3)
+    
     with col1:
-        if st.button("💾 Save Lineup", use_container_width=True):
-            st.session_state.lineup = lineup
-            st.success("Lineup saved!")
+        if st.button("📄 Export Lineup PDF", use_container_width=True):
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 20)
+            pdf.cell(0, 15, "Match Lineup", ln=True, align="C")
+            pdf.ln(5)
+            
+            pdf.set_font("Arial", "", 12)
+            pdf.cell(0, 8, f"Coach: {team_data['coach']} | Assistant: {team_data['assistant']}", ln=True)
+            if opponent:
+                pdf.cell(0, 8, f"Opponent: {opponent}", ln=True)
+            pdf.cell(0, 8, f"Formation: {formation}", ln=True)
+            pdf.cell(0, 8, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
+            pdf.ln(10)
+            
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 10, "Starting XI", ln=True)
+            pdf.set_font("Arial", "B", 10)
+            pdf.cell(50, 8, "Position", 1)
+            pdf.cell(90, 8, "Player", 1)
+            pdf.cell(40, 8, "Jersey", 1, ln=True)
+            
+            pdf.set_font("Arial", "", 10)
+            for row in lineup_rows:
+                pdf.cell(50, 8, str(row["Position"]), 1)
+                pdf.cell(90, 8, str(row["Player"]), 1)
+                pdf.cell(40, 8, str(row["Jersey"]), 1, ln=True)
+            
+            pdf.ln(10)
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 10, "Substitutes", ln=True)
+            pdf.set_font("Arial", "", 10)
+            
+            for row in sub_rows:
+                pdf.cell(90, 8, str(row["Player"]), 1)
+                pdf.cell(40, 8, str(row["Jersey"]), 1, ln=True)
+            
+            pdf.output("lineup.pdf")
+            with open("lineup.pdf", "rb") as f:
+                st.download_button("📥 Download PDF", f, "lineup.pdf", use_container_width=True)
     
     with col2:
-        if st.button("📄 Export PDF", use_container_width=True):
-            pdf_path = export_lineup_to_pdf(lineup, st.session_state.substitutes)
-            with open(pdf_path, "rb") as f:
-                st.download_button(
-                    "Download PDF",
-                    f,
-                    file_name=pdf_path,
-                    mime="application/pdf"
-                )
+        if st.button("💾 Save Lineup", use_container_width=True, type="primary"):
+            st.session_state.lineup = lineup
+            st.session_state.subs = subs
+            st.session_state.formation = formation
+            st.session_state.opponent = opponent
+            st.success("✅ Lineup saved!")
     
     with col3:
-        if st.button("🖨️ Print View", use_container_width=True):
-            show_print_view(lineup, st.session_state.substitutes)
+        if lineup:
+            lineup_json = json.dumps({"lineup": lineup, "subs": subs, "formation": formation}, indent=2)
+            st.download_button("📥 Export JSON", lineup_json, "lineup.json", use_container_width=True)
     
-    st.session_state.lineup = lineup
-    return lineup
+    return lineup, subs, opponent
 
-def export_lineup_to_pdf(lineup: Dict, substitutes: List[str]) -> str:
-    """Export lineup to PDF"""
-    pdf = FPDF()
-    pdf.add_page()
+# -------------------- MATCH SETTINGS -------------------- #
+def match_settings():
+    st.header("⚙️ Match Configuration")
     
-    # Header
-    pdf.set_font("Arial", "B", 24)
-    pdf.cell(0, 20, "Match Lineup Sheet", ln=True, align="C")
-    pdf.ln(10)
-    
-    # Team info
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Coach: {st.session_state.team_data.get('coach', 'N/A')}", ln=True)
-    pdf.cell(0, 10, f"Assistant: {st.session_state.team_data.get('assistant', 'N/A')}", ln=True)
-    pdf.cell(0, 10, f"Formation: {st.session_state.get('formation', 'N/A')}", ln=True)
-    pdf.cell(0, 10, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
-    pdf.ln(10)
-    
-    # Starting XI
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Starting XI", ln=True)
-    pdf.set_font("Arial", "", 12)
-    
-    pdf.cell(40, 10, "Position", 1)
-    pdf.cell(100, 10, "Player", 1)
-    pdf.cell(40, 10, "Jersey #", 1, ln=True)
-    
-    for position, player in lineup.items():
-        if player != "—":
-            jersey = next((p['jersey'] for p in st.session_state.team_data['players'] if p['name'] == player), "—")
-            pdf.cell(40, 10, position, 1)
-            pdf.cell(100, 10, player, 1)
-            pdf.cell(40, 10, str(jersey), 1, ln=True)
-    
-    pdf.ln(10)
-    
-    # Substitutes
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Substitutes", ln=True)
-    pdf.set_font("Arial", "", 12)
-    
-    pdf.cell(40, 10, "Position", 1)
-    pdf.cell(100, 10, "Player", 1)
-    pdf.cell(40, 10, "Jersey #", 1, ln=True)
-    
-    for sub in substitutes:
-        if sub != "—":
-            jersey = next((p['jersey'] for p in st.session_state.team_data['players'] if p['name'] == sub), "—")
-            pdf.cell(40, 10, "SUB", 1)
-            pdf.cell(100, 10, sub, 1)
-            pdf.cell(40, 10, str(jersey), 1, ln=True)
-    
-    # Save file
-    filename = f"lineup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    pdf.output(filename)
-    return filename
-
-def show_print_view(lineup: Dict, substitutes: List[str]):
-    """Display printable lineup view"""
-    with st.expander("🖨️ Printable Lineup", expanded=True):
-        st.markdown("""
-        <style>
-        @media print {
-            .no-print { display: none; }
-            body { font-size: 12pt; }
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        st.header("Match Lineup Sheet")
-        st.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        st.write(f"**Coach:** {st.session_state.team_data.get('coach', 'N/A')}")
-        st.write(f"**Formation:** {st.session_state.get('formation', 'N/A')}")
-        
-        st.subheader("Starting XI")
-        start_df = pd.DataFrame([
-            {
-                "Position": pos,
-                "Player": player,
-                "Jersey": next((p['jersey'] for p in st.session_state.team_data['players'] if p['name'] == player), "—")
-            }
-            for pos, player in lineup.items() if player != "—"
-        ])
-        st.table(start_df)
-        
-        st.subheader("Substitutes")
-        sub_df = pd.DataFrame([
-            {
-                "Position": "SUB",
-                "Player": sub,
-                "Jersey": next((p['jersey'] for p in st.session_state.team_data['players'] if p['name'] == sub), "—")
-            }
-            for sub in substitutes if sub != "—"
-        ])
-        st.table(sub_df)
-        
-        st.button("🖨️ Print this Page", on_click=lambda: st.write('<script>window.print()</script>', unsafe_allow_html=True))
-
-# -------------------- ENHANCED MATCH SETTINGS -------------------- #
-def match_settings_page():
-    """Enhanced match settings with more options"""
-    st.header("⚙️ Match Settings")
-    
-    if 'team_data' not in st.session_state:
-        st.warning("⚠️ Please complete Team Sheet first.")
+    if "team_data" not in st.session_state:
+        st.warning("⚠️ Complete Team Sheet first.")
         return
     
-    if 'lineup' not in st.session_state or not st.session_state.lineup:
-        st.warning("⚠️ Please select lineup first.")
+    if "lineup" not in st.session_state:
+        st.warning("⚠️ Select lineup first.")
         return
     
-    # Match details
-    with st.form("match_settings_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Match Information")
-            st.session_state.match_date = st.date_input("Match Date", datetime.now())
-            st.session_state.match_time = st.time_input("Match Time", datetime.now().time())
-            st.session_state.match_location = st.text_input("Venue", placeholder="Stadium name")
-            st.session_state.opponent_team = st.text_input("Opponent Team", placeholder="Opponent team name")
-        
-        with col2:
-            st.subheader("Match Conditions")
-            st.session_state.game_duration = st.number_input(
-                "Match Duration (minutes)",
-                min_value=40,
-                max_value=120,
-                value=90,
-                help="Total match duration including stoppage time"
-            )
-            st.session_state.halftime_duration = st.number_input(
-                "Halftime Duration (minutes)",
-                min_value=5,
-                max_value=30,
-                value=15
-            )
-            st.session_state.match_level = st.selectbox(
-                "Tracking Level",
-                options=["Beginner", "Intermediate", "Semi-Pro", "Pro"],
-                index=0,
-                help="Select the level of detail for statistics tracking"
-            )
-            st.session_state.weather_conditions = st.selectbox(
-                "Weather Conditions",
-                options=["Sunny", "Cloudy", "Rainy", "Windy", "Snow", "Artificial Light"],
-                index=0
-            )
-        
-        # Additional match info
-        st.subheader("Additional Information")
-        col3, col4 = st.columns(2)
-        with col3:
-            st.session_state.referee = st.text_input("Referee", placeholder="Referee name")
-            st.session_state.competition = st.text_input("Competition", placeholder="Tournament/League name")
-        
-        with col4:
-            st.session_state.match_notes = st.text_area(
-                "Match Notes",
-                placeholder="Additional notes about the match...",
-                height=100
-            )
-        
-        # Actions preview
-        st.subheader("📊 Available Actions Preview")
-        actions_dict = get_actions_per_level()[st.session_state.match_level]
-        
-        for group, actions in actions_dict.items():
-            with st.expander(f"{group} Actions"):
-                cols = st.columns(3)
-                for idx, action in enumerate(actions):
-                    col = cols[idx % 3]
-                    col.info(f"• {action}")
-        
-        # Submit button
-        if st.form_submit_button("🚀 Proceed to Live Match", use_container_width=True, type="primary"):
-            if validate_match_settings():
-                st.session_state.match_ready = True
-                st.session_state.match_id = f"match_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                st.success("✅ Match settings saved! Proceeding to Live Match...")
-                st.balloons()
-                time.sleep(1)
-                st.rerun()
-
-def validate_match_settings() -> bool:
-    """Validate match settings"""
-    errors = []
+    col1, col2, col3 = st.columns(3)
     
-    if not st.session_state.get('opponent_team', '').strip():
-        errors.append("Opponent team name is required")
-    
-    if st.session_state.get('game_duration', 0) < 40:
-        errors.append("Match duration must be at least 40 minutes")
-    
-    if len(st.session_state.get('lineup', {})) < 7:
-        errors.append("Need at least 7 players in lineup")
-    
-    if errors:
-        for error in errors:
-            st.error(error)
-        return False
-    
-    return True
-
-# -------------------- ENHANCED LIVE MATCH TIMER -------------------- #
-class MatchTimer:
-    """Enhanced match timer with multiple periods"""
-    
-    def __init__(self):
-        self.ph = st.empty()
-        self.status_ph = st.empty()
-        
-    def display(self):
-        """Display the timer with status"""
-        if st.session_state.match_started and not st.session_state.match_paused:
-            current_time = time.time()
-            elapsed = current_time - st.session_state.start_time
-            st.session_state.elapsed_time = elapsed
-            
-            # Check for half time
-            if elapsed > (st.session_state.game_duration * 60 / 2) and st.session_state.current_half == 1:
-                st.session_state.current_half = 1.5  # Half time
-                self._handle_half_time()
-            elif elapsed > (st.session_state.game_duration * 60 / 2 + st.session_state.halftime_duration * 60) and st.session_state.current_half == 1.5:
-                st.session_state.current_half = 2
-                self._handle_second_half_start()
-        
-        mins, secs = self._get_display_time()
-        period = self._get_period_display()
-        
-        # Determine color
-        color = self._get_timer_color(mins, secs)
-        
-        # Display timer
-        self.ph.markdown(f"""
-        <div class="timer-container">
-            <div class="period-display">{period}</div>
-            <div class="timer-display" style="color: {color}">{mins:02d}:{secs:02d}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        return mins, secs
-    
-    def _get_display_time(self) -> Tuple[int, int]:
-        """Get formatted time"""
-        elapsed = st.session_state.elapsed_time
-        
-        if st.session_state.current_half == 2:
-            # Second half time
-            halftime_point = (st.session_state.game_duration * 60 / 2) + (st.session_state.halftime_duration * 60)
-            second_half_elapsed = elapsed - halftime_point
-            if second_half_elapsed < 0:
-                second_half_elapsed = 0
-            mins = int(second_half_elapsed // 60)
-            secs = int(second_half_elapsed % 60)
-        else:
-            mins = int(elapsed // 60)
-            secs = int(elapsed % 60)
-        
-        return mins, secs
-    
-    def _get_period_display(self) -> str:
-        """Get period display string"""
-        if st.session_state.current_half == 1:
-            return "1st Half"
-        elif st.session_state.current_half == 1.5:
-            return "Half Time"
-        elif st.session_state.current_half == 2:
-            return "2nd Half"
-        else:
-            return "Match Ended"
-    
-    def _get_timer_color(self, mins: int, secs: int) -> str:
-        """Get timer color based on match state"""
-        if not st.session_state.match_started:
-            return "#FFA500"  # Orange for paused
-        elif st.session_state.match_paused:
-            return "#FFA500"  # Orange for paused
-        elif st.session_state.current_half == 1.5:
-            return "#9370DB"  # Purple for half time
-        elif mins >= st.session_state.game_duration:
-            return "#FF4444"  # Red for overtime
-        else:
-            return "#44FF44"  # Green for running
-    
-    def _handle_half_time(self):
-        """Handle half time transition"""
-        # Save first half stats
-        if st.session_state.stats:
-            st.session_state.first_half_stats = st.session_state.stats.copy()
-            st.session_state.stats = []
-        
-        # Update status
-        self.status_ph.info("⏸️ Half time! Stats saved for first half.")
-    
-    def _handle_second_half_start(self):
-        """Handle second half start"""
-        self.status_ph.success("▶️ Second half started!")
-    
-    def control_panel(self):
-        """Display timer control panel"""
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            if not st.session_state.match_started:
-                if st.button("▶️ Start Match", use_container_width=True, type="primary"):
-                    if not st.session_state.match_started:
-                        st.session_state.start_time = time.time() - st.session_state.elapsed_time
-                        st.session_state.match_started = True
-                        st.session_state.match_paused = False
-                        st.rerun()
-            elif st.session_state.match_paused:
-                if st.button("▶️ Resume", use_container_width=True, type="primary"):
-                    st.session_state.start_time = time.time() - st.session_state.elapsed_time
-                    st.session_state.match_paused = False
-                    st.rerun()
-            else:
-                if st.button("⏸️ Pause", use_container_width=True):
-                    st.session_state.elapsed_time = time.time() - st.session_state.start_time
-                    st.session_state.match_paused = True
-                    st.rerun()
-        
-        with col2:
-            if st.button("⏹️ End Half", use_container_width=True):
-                if st.session_state.current_half == 1:
-                    st.session_state.current_half = 1.5
-                    self._handle_half_time()
-                elif st.session_state.current_half == 2:
-                    st.session_state.current_half = 3  # Match ended
-                    self._handle_match_end()
-                st.rerun()
-        
-        with col3:
-            if st.button("➕ Add Time", use_container_width=True):
-                st.session_state.elapsed_time += 60  # Add 1 minute
-                if st.session_state.match_started and not st.session_state.match_paused:
-                    st.session_state.start_time = time.time() - st.session_state.elapsed_time
-                st.rerun()
-        
-        with col4:
-            if st.button("➖ Remove Time", use_container_width=True):
-                st.session_state.elapsed_time = max(0, st.session_state.elapsed_time - 60)
-                if st.session_state.match_started and not st.session_state.match_paused:
-                    st.session_state.start_time = time.time() - st.session_state.elapsed_time
-                st.rerun()
-        
-        with col5:
-            if st.button("🔄 Reset", use_container_width=True):
-                self._reset_timer()
-                st.rerun()
-    
-    def _reset_timer(self):
-        """Reset timer to initial state"""
-        st.session_state.elapsed_time = 0
-        st.session_state.start_time = None
-        st.session_state.match_started = False
-        st.session_state.match_paused = False
-        st.session_state.current_half = 1
-        st.session_state.stats = []
-        st.session_state.first_half_stats = []
-        st.session_state.second_half_stats = []
-    
-    def _handle_match_end(self):
-        """Handle match end"""
-        # Save second half stats
-        if st.session_state.stats:
-            st.session_state.second_half_stats = st.session_state.stats.copy()
-        
-        # Save full match data
-        save_match_data()
-        
-        st.success("🏁 Match ended! Full stats saved.")
-
-# -------------------- ENHANCED ACTION LOGGING -------------------- #
-def action_logging_page():
-    """Enhanced action logging interface"""
-    st.header("📝 Action Logging")
-    
-    if not st.session_state.get('match_ready', False):
-        st.info("Please complete match settings first.")
-        return
-    
-    # Quick stats overview
-    if st.session_state.stats:
-        display_quick_stats()
-    
-    # Player selection
-    col1, col2 = st.columns([2, 1])
     with col1:
-        player_options = ["All Players"] + list(st.session_state.lineup.values())
-        st.session_state.selected_player = st.selectbox(
-            "Select Player",
-            options=player_options,
-            index=0
-        )
+        level = st.selectbox("📊 Tracking Level", ["Beginner", "Intermediate", "Semi-Pro", "Pro"])
     
     with col2:
-        # Undo/Redo functionality
-        col_undo, col_redo = st.columns(2)
-        with col_undo:
-            if st.button("↶ Undo", disabled=not st.session_state.undo_stack):
-                undo_last_action()
-        with col_redo:
-            if st.button("↷ Redo", disabled=not st.session_state.redo_stack):
-                redo_action()
+        game_duration = st.number_input("⏱️ Match Duration (min)", min_value=20, max_value=120, value=90, step=10)
     
-    # Get current time
-    timer = MatchTimer()
-    mins, secs = timer.display()
+    with col3:
+        halftime_duration = st.number_input("☕ Halftime Duration (min)", min_value=0, max_value=30, value=15, step=5)
     
-    # Action logging interface
-    if st.session_state.selected_player == "All Players":
-        # Show all players in expanders
-        for position, player in st.session_state.lineup.items():
-            if player != "—":
-                with st.expander(f"**{player}** ({position})", expanded=True):
-                    display_player_actions(player, position, mins, secs)
-    else:
-        # Show single player actions
-        player = st.session_state.selected_player
-        position = [k for k, v in st.session_state.lineup.items() if v == player][0]
-        display_player_actions(player, position, mins, secs, expanded=True)
+    st.markdown("---")
+    st.subheader("📋 Actions Preview")
+    st.info(f"Review the actions available for tracking at **{level}** level")
+    
+    actions_dict = get_actions_per_level()[level]
+    
+    tabs = st.tabs(list(actions_dict.keys()))
+    for tab, (group, actions) in zip(tabs, actions_dict.items()):
+        with tab:
+            st.markdown(f"**{group}**: {', '.join(actions)}")
+    
+    st.markdown("---")
+    
+    if st.button("🚀 START MATCH", use_container_width=True, type="primary"):
+        st.session_state.match_level = level
+        st.session_state.game_duration = game_duration
+        st.session_state.halftime_duration = halftime_duration
+        st.session_state.match_ready = True
+        st.session_state.match_started = False
+        st.session_state.elapsed_time = 0
+        st.session_state.stats = []
+        st.session_state.match_events = []
+        st.session_state.substitutions = []
+        st.session_state.active_players = set(st.session_state.lineup.values())
+        st.session_state.match_score = {"home": 0, "away": 0}
+        
+        st.success("✅ Match settings locked! Proceeding to Live Match...")
+        st.balloons()
+        st.rerun()
+
+# -------------------- LIVE MATCH -------------------- #
+def live_match():
+    if not st.session_state.get("match_ready", False):
+        st.info("⚠️ Please complete all setup tabs and click 'START MATCH' in Match Settings.")
+        return
+    
+    st.header("⚽ Live Match Tracking")
+    
+    # Match info header
+    col1, col2, col3 = st.columns([2, 3, 2])
+    
+    with col1:
+        st.metric("Formation", st.session_state.get("formation", "N/A"))
+        st.metric("Level", st.session_state.get("match_level", "N/A"))
+    
+    with col2:
+        # Timer display
+        mins = int(st.session_state.elapsed_time // 60)
+        secs = int(st.session_state.elapsed_time % 60)
+        status = "🟢 LIVE" if st.session_state.match_started else "⏸️ PAUSED"
+        
+        st.markdown(f"""
+        <div class='timer-display {"timer-running" if st.session_state.match_started else "timer-paused"}'>
+            {status}<br>{mins:02d}:{secs:02d}
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.metric("Opponent", st.session_state.get("opponent", "N/A"))
+        
+        # Score tracking
+        col_a, col_b = st.columns(2)
+        with col_a:
+            home_score = st.number_input("Us", value=st.session_state.match_score["home"], min_value=0, key="home_score")
+            st.session_state.match_score["home"] = home_score
+        with col_b:
+            away_score = st.number_input("Them", value=st.session_state.match_score["away"], min_value=0, key="away_score")
+            st.session_state.match_score["away"] = away_score
+    
+    # Timer controls
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("▶️ Start", use_container_width=True, type="primary"):
+            st.session_state.match_started = True
+            st.rerun()
+    
+    with col2:
+        if st.button("⏸️ Pause", use_container_width=True):
+            st.session_state.match_started = False
+    
+    with col3:
+        if st.button("🔄 Reset", use_container_width=True):
+            if st.session_state.get("stats"):
+                st.warning("⚠️ This will clear all match data!")
+            else:
+                st.session_state.elapsed_time = 0
+                st.session_state.match_started = False
+                st.session_state.stats = []
+                st.session_state.match_events = []
+                st.rerun()
+    
+    with col4:
+        if st.button("💾 Save & End", use_container_width=True):
+            if st.session_state.get("stats"):
+                match_data = {
+                    "date": datetime.now().isoformat(),
+                    "opponent": st.session_state.get("opponent", "Unknown"),
+                    "formation": st.session_state.get("formation"),
+                    "level": st.session_state.get("match_level"),
+                    "duration": st.session_state.elapsed_time,
+                    "score": st.session_state.match_score,
+                    "lineup": st.session_state.get("lineup", {}),
+                    "subs": st.session_state.get("subs", []),
+                    "substitutions": st.session_state.get("substitutions", []),
+                    "stats": st.session_state.stats,
+                    "events": st.session_state.get("match_events", [])
+                }
+                filename = save_match_data(match_data)
+                if filename:
+                    st.success(f"✅ Match saved: {filename}")
+                    st.session_state.match_ready = False
+            else:
+                st.error("No stats to save!")
+    
+    # Auto-refresh timer when running
+    if st.session_state.match_started:
+        st.session_state.elapsed_time += 1
+        import time
+        time.sleep(1)
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # Substitution management
+    with st.expander("🔄 Substitutions", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            active = list(st.session_state.active_players)
+            player_off = st.selectbox("Player OFF", active, key="sub_off")
+        
+        with col2:
+            available_subs = [s for s in st.session_state.subs if s not in st.session_state.active_players]
+            player_on = st.selectbox("Player ON", available_subs, key="sub_on")
+        
+        with col3:
+            if st.button("Make Substitution", use_container_width=True):
+                if player_off and player_on:
+                    st.session_state.active_players.remove(player_off)
+                    st.session_state.active_players.add(player_on)
+                    
+                    sub_event = {
+                        "time": f"{mins:02d}:{secs:02d}",
+                        "type": "substitution",
+                        "off": player_off,
+                        "on": player_on
+                    }
+                    st.session_state.substitutions.append(sub_event)
+                    st.session_state.match_events.append(sub_event)
+                    st.success(f"✅ {player_on} replaces {player_off}")
+                    st.rerun()
+        
+        # Show substitution history
+        if st.session_state.substitutions:
+            st.markdown("**Substitution History:**")
+            for sub in st.session_state.substitutions:
+                st.text(f"{sub['time']}: {sub['on']} ➡️ {sub['off']}")
+    
+    # Quick actions
+    st.markdown("---")
+    st.subheader("⚡ Quick Actions")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("⚽ GOAL", use_container_width=True):
+            st.session_state.match_events.append({
+                "time": f"{mins:02d}:{secs:02d}",
+                "type": "goal",
+                "team": "home"
+            })
+            st.session_state.match_score["home"] += 1
+            st.success("⚽ GOAL!")
+    
+    with col2:
+        if st.button("🟨 Yellow Card", use_container_width=True):
+            st.session_state.match_events.append({
+                "time": f"{mins:02d}:{secs:02d}",
+                "type": "yellow_card"
+            })
+            st.warning("🟨 Yellow Card")
+    
+    with col3:
+        if st.button("🟥 Red Card", use_container_width=True):
+            st.session_state.match_events.append({
+                "time": f"{mins:02d}:{secs:02d}",
+                "type": "red_card"
+            })
+            st.error("🟥 Red Card")
+    
+    with col4:
+        if st.button("🎯 Penalty", use_container_width=True):
+            st.session_state.match_events.append({
+                "time": f"{mins:02d}:{secs:02d}",
+                "type": "penalty"
+            })
+            st.info("🎯 Penalty")
+    
+    # Action logging
+    st.markdown("---")
+    st.subheader("📊 Player Action Logging")
+    
+    lineup = st.session_state.lineup
+    level = st.session_state.match_level
+    actions_dict = get_actions_per_level()[level]
+    
+    # Filter to show only active players
+    active_lineup = {role: player for role, player in lineup.items() 
+                     if player in st.session_state.active_players}
+    
+    # Group by position type
+    position_groups = {
+        "Goalkeeper": ["GK"],
+        "Defence": ["CB", "RCB", "LCB", "RB", "LB", "RWB", "LWB"],
+        "Midfield": ["DM", "CDM", "CM", "CAM", "AM", "RM", "LM"],
+        "Attack": ["RW", "LW", "ST", "CF"]
+    }
+    
+    tabs = st.tabs(["All Players"] + list(position_groups.keys()))
+    
+    with tabs[0]:
+        for role, player in active_lineup.items():
+            log_player_actions(player, role, actions_dict, mins, secs)
+    
+    for i, (group_name, positions) in enumerate(position_groups.items(), 1):
+        with tabs[i]:
+            group_players = {r: p for r, p in active_lineup.items() if r in positions}
+            if group_players:
+                for role, player in group_players.items():
+                    log_player_actions(player, role, actions_dict, mins, secs)
+            else:
+                st.info(f"No active players in {group_name}")
     
     # Live stats display
     if st.session_state.stats:
+        st.markdown("---")
         display_live_stats()
 
-def display_player_actions(player: str, position: str, mins: int, secs: int, expanded: bool = False):
-    """Display action buttons for a specific player"""
-    # Get actions for player's role
-    level = st.session_state.match_level
-    actions_dict = get_actions_per_level()[level]
-    role_group = role_groups.get(position, "Central Midfielder")
-    
-    # Combine all actions and role-specific actions
-    all_actions = actions_dict.get("All", [])
-    role_actions = actions_dict.get(role_group, [])
-    available_actions = list(set(all_actions + role_actions))
-    
-    # Display action buttons in columns
-    cols_per_row = 3
-    cols = st.columns(cols_per_row)
-    
-    outcomes = ["✅ Successful", "❌ Unsuccessful", "⚪ Neutral"]
-    
-    for idx, action in enumerate(available_actions):
-        col = cols[idx % cols_per_row]
-        with col:
-            # Create a unique key
-            action_key = f"{player}_{action}_{idx}_{mins}_{secs}"
+def log_player_actions(player, role, actions_dict, mins, secs):
+    """Helper function to log actions for a player"""
+    with st.expander(f"**{player}** ({role})", expanded=False):
+        grouped_role = role_groups.get(role, "Central Midfielder")
+        all_actions = list(set(actions_dict.get("All", []) + actions_dict.get(grouped_role, [])))
+        
+        # Create action buttons in grid
+        cols = st.columns(4)
+        for idx, action in enumerate(sorted(all_actions)):
+            col = cols[idx % 4]
             
-            # Use columns within button for better layout
-            if st.button(
-                f"{action}",
-                key=f"btn_{action_key}",
-                use_container_width=True
-            ):
-                # Show outcome selector
-                outcome = st.selectbox(
-                    "Select Outcome",
-                    options=outcomes,
-                    key=f"outcome_{action_key}",
-                    label_visibility="collapsed"
-                )
-                
-                if outcome:
-                    log_action(player, position, action, outcome, mins, secs)
-                    st.success(f"✅ Logged: {player} - {action}")
-                    st.rerun()
-
-def log_action(player: str, position: str, action: str, outcome: str, mins: int, secs: int):
-    """Log an action with undo support"""
-    # Save current state for undo
-    if len(st.session_state.stats) > 0:
-        st.session_state.undo_stack.append(st.session_state.stats.copy())
-    
-    # Clear redo stack
-    st.session_state.redo_stack.clear()
-    
-    # Add new action
-    action_record = {
-        "player": player,
-        "position": position,
-        "action": action,
-        "outcome": outcome.replace("✅ ", "").replace("❌ ", "").replace("⚪ ", ""),
-        "time": f"{mins:02d}:{secs:02d}",
-        "timestamp": datetime.now().isoformat(),
-        "half": "1H" if st.session_state.current_half == 1 else "2H"
-    }
-    
-    st.session_state.stats.append(action_record)
-
-def undo_last_action():
-    """Undo the last action"""
-    if st.session_state.undo_stack:
-        # Move current state to redo stack
-        st.session_state.redo_stack.append(st.session_state.stats.copy())
-        # Restore previous state
-        st.session_state.stats = st.session_state.undo_stack.pop()
-        st.rerun()
-
-def redo_action():
-    """Redo the last undone action"""
-    if st.session_state.redo_stack:
-        # Save current state to undo stack
-        st.session_state.undo_stack.append(st.session_state.stats.copy())
-        # Restore redone state
-        st.session_state.stats = st.session_state.redo_stack.pop()
-        st.rerun()
-
-def display_quick_stats():
-    """Display quick stats overview"""
-    st.subheader("📊 Live Stats Summary")
-    
-    df = pd.DataFrame(st.session_state.stats)
-    
-    if not df.empty:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            total_actions = len(df)
-            st.metric("Total Actions", total_actions)
-        
-        with col2:
-            successful = len(df[df['outcome'] == 'Successful'])
-            success_rate = (successful / total_actions * 100) if total_actions > 0 else 0
-            st.metric("Success Rate", f"{success_rate:.1f}%")
-        
-        with col3:
-            unique_players = df['player'].nunique()
-            st.metric("Active Players", unique_players)
-        
-        with col4:
-            actions_per_min = total_actions / (st.session_state.elapsed_time / 60) if st.session_state.elapsed_time > 0 else 0
-            st.metric("Actions/Min", f"{actions_per_min:.1f}")
+            col1, col2 = col.columns(2)
+            with col1:
+                if col1.button(f"✅ {action}", key=f"{player}_{action}_success_{idx}", use_container_width=True):
+                    st.session_state.stats.append({
+                        "player": player,
+                        "role": role,
+                        "action": action,
+                        "outcome": "Successful",
+                        "time": f"{mins:02d}:{secs:02d}",
+                        "timestamp": st.session_state.elapsed_time
+                    })
+                    st.toast(f"✅ {player}: {action} (Success)")
+            
+            with col2:
+                if col2.button(f"❌ {action}", key=f"{player}_{action}_fail_{idx}", use_container_width=True):
+                    st.session_state.stats.append({
+                        "player": player,
+                        "role": role,
+                        "action": action,
+                        "outcome": "Unsuccessful",
+                        "time": f"{mins:02d}:{secs:02d}",
+                        "timestamp": st.session_state.elapsed_time
+                    })
+                    st.toast(f"❌ {player}: {action} (Failed)")
 
 def display_live_stats():
-    """Display live statistics table"""
+    """Display live statistics and visualizations"""
+    st.subheader("📈 Live Statistics")
+    
     df = pd.DataFrame(st.session_state.stats)
     
-    # Summary by player
-    st.subheader("Player Statistics")
-    player_summary = df.groupby(['player', 'action', 'outcome']).size().unstack(fill_value=0)
-    st.dataframe(player_summary, use_container_width=True)
-    
-    # Recent actions
-    st.subheader("Recent Actions")
-    recent_df = df.tail(10).copy()
-    recent_df['index'] = range(len(recent_df) - 1, -1, -1)
-    st.dataframe(
-        recent_df[['time', 'player', 'action', 'outcome']].sort_values('time', ascending=False),
-        use_container_width=True,
-        hide_index=True
-    )
-
-# -------------------- ENHANCED ANALYTICS -------------------- #
-def analytics_page():
-    """Enhanced analytics dashboard"""
-    st.header("📈 Match Analytics")
-    
-    # Check for data
-    has_live_data = len(st.session_state.stats) > 0
-    has_saved_data = len(os.listdir(MATCH_DATA_DIR)) > 0
-    
-    if not has_live_data and not has_saved_data:
-        st.info("No match data available yet. Start a match to see analytics.")
-        return
-    
-    # Data selection
-    tab1, tab2, tab3 = st.tabs(["📊 Live Match", "📁 Historical", "📋 Player Reports"])
-    
-    with tab1:
-        if has_live_data:
-            display_live_analytics()
-        else:
-            st.info("No live match data available.")
-    
-    with tab2:
-        if has_saved_data:
-            display_historical_analytics()
-        else:
-            st.info("No historical match data available.")
-    
-    with tab3:
-        display_player_reports()
-
-def display_live_analytics():
-    """Display analytics for live match"""
-    df = pd.DataFrame(st.session_state.stats)
-    
-    if df.empty:
-        st.info("No live match data available.")
-        return
-    
-    # Key metrics
+    # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -1377,661 +787,215 @@ def display_live_analytics():
         st.metric("Total Actions", total_actions)
     
     with col2:
-        successful = len(df[df['outcome'] == 'Successful'])
-        success_rate = (successful / total_actions * 100) if total_actions > 0 else 0
+        success_rate = (df[df['outcome'] == 'Successful'].shape[0] / total_actions * 100) if total_actions > 0 else 0
         st.metric("Success Rate", f"{success_rate:.1f}%")
     
     with col3:
-        players = df['player'].nunique()
-        st.metric("Players Involved", players)
+        active_players = df['player'].nunique()
+        st.metric("Active Players", active_players)
     
     with col4:
-        avg_actions = total_actions / players if players > 0 else 0
-        st.metric("Avg Actions/Player", f"{avg_actions:.1f}")
+        most_actions = df['player'].value_counts().iloc[0] if not df.empty else 0
+        st.metric("Most Active", most_actions)
     
-    # Charts
-    col1, col2 = st.columns(2)
+    # Detailed stats tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["Player Stats", "Action Breakdown", "Timeline", "Export"])
     
-    with col1:
-        # Actions by player
-        fig = px.bar(
-            df['player'].value_counts().reset_index(),
-            x='player',
-            y='count',
-            title='Actions by Player',
-            color='player'
-        )
+    with tab1:
+        # Player summary
+        player_stats = df.groupby(['player', 'outcome']).size().unstack(fill_value=0)
+        if not player_stats.empty:
+            player_stats['Total'] = player_stats.sum(axis=1)
+            if 'Successful' in player_stats.columns:
+                player_stats['Success %'] = (player_stats['Successful'] / player_stats['Total'] * 100).round(1)
+            st.dataframe(player_stats.sort_values('Total', ascending=False), use_container_width=True)
+            
+            # Top performers chart
+            fig = px.bar(player_stats.reset_index(), x='player', y='Total',
+                        title="Total Actions by Player",
+                        color='Total', color_continuous_scale='Blues')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        # Action breakdown
+        action_stats = df.groupby(['action', 'outcome']).size().unstack(fill_value=0)
+        if not action_stats.empty:
+            st.dataframe(action_stats, use_container_width=True)
+            
+            # Action success rates
+            fig = px.bar(action_stats.reset_index(), x='action', 
+                        y=['Successful', 'Unsuccessful'],
+                        title="Action Success/Failure Breakdown",
+                        barmode='group')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with tab3:
+        # Timeline
+        st.markdown("**Match Timeline**")
+        timeline_df = df[['time', 'player', 'action', 'outcome']].sort_values('time', ascending=False)
+        st.dataframe(timeline_df.head(50), use_container_width=True, hide_index=True)
+        
+        # Actions over time
+        df['minute'] = df['timestamp'] // 60
+        actions_per_minute = df.groupby('minute').size()
+        
+        fig = px.line(x=actions_per_minute.index, y=actions_per_minute.values,
+                     title="Action Intensity Over Time",
+                     labels={'x': 'Minute', 'y': 'Actions'})
         st.plotly_chart(fig, use_container_width=True)
     
-    with col2:
-        # Outcome distribution
-        outcome_counts = df['outcome'].value_counts()
-        fig = px.pie(
-            values=outcome_counts.values,
-            names=outcome_counts.index,
-            title='Outcome Distribution',
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Action timeline
-    st.subheader("Action Timeline")
-    
-    # Convert time to minutes for plotting
-    df['time_min'] = df['time'].apply(lambda x: int(x.split(':')[0]) + int(x.split(':')[1])/60)
-    
-    timeline_df = df.groupby('time_min').size().reset_index()
-    timeline_df.columns = ['Time (min)', 'Actions']
-    
-    fig = px.line(
-        timeline_df,
-        x='Time (min)',
-        y='Actions',
-        title='Actions Over Time'
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed statistics
-    st.subheader("Detailed Statistics")
-    
-    # Player performance matrix
-    player_matrix = df.groupby(['player', 'action']).size().unstack(fill_value=0)
-    st.dataframe(player_matrix, use_container_width=True)
+    with tab4:
+        # Export options
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            csv = df.to_csv(index=False)
+            st.download_button("📥 Download CSV", csv, "match_stats.csv", "text/csv", use_container_width=True)
+        
+        with col2:
+            json_data = df.to_json(orient='records', indent=2)
+            st.download_button("📥 Download JSON", json_data, "match_stats.json", use_container_width=True)
 
-def display_historical_analytics():
-    """Display analytics for historical matches"""
-    # Load all match files
-    match_files = [f for f in os.listdir(MATCH_DATA_DIR) if f.endswith('.json')]
+# -------------------- MATCH HISTORY -------------------- #
+def match_history():
+    st.header("📚 Match History")
     
-    if not match_files:
-        st.info("No historical match data available.")
+    matches = load_all_matches()
+    
+    if not matches:
+        st.info("No matches recorded yet. Start tracking matches to build your history!")
         return
     
-    # Match selection
-    selected_match = st.selectbox(
-        "Select Match",
-        options=match_files,
-        format_func=lambda x: x.replace('.json', '').replace('match_', '').replace('_', ' ')
-    )
+    st.metric("Total Matches", len(matches))
     
-    # Load selected match
-    match_path = os.path.join(MATCH_DATA_DIR, selected_match)
-    with open(match_path, 'r') as f:
-        match_data = json.load(f)
-    
-    # Display match info
-    st.subheader(f"Match: {match_data.get('timestamp', 'Unknown Date')}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"**Coach:** {match_data.get('coach', 'N/A')}")
-        st.write(f"**Formation:** {match_data.get('formation', 'N/A')}")
-    with col2:
-        st.write(f"**Level:** {match_data.get('level', 'N/A')}")
-        st.write(f"**Duration:** {match_data.get('duration', 'N/A')} min")
-    
-    # Load stats
-    stats_df = pd.DataFrame(match_data.get('stats', []))
-    
-    if not stats_df.empty:
-        # Similar analytics as live match
-        display_match_analytics(stats_df, match_data)
-    else:
-        st.info("No statistics available for this match.")
-
-def display_match_analytics(df: pd.DataFrame, match_data: Dict):
-    """Display analytics for a specific match"""
-    # Key metrics
+    # Filter options
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        total_actions = len(df)
-        st.metric("Total Actions", total_actions)
+        opponents = list(set([m.get("opponent", "Unknown") for m in matches]))
+        selected_opponent = st.selectbox("Filter by Opponent", ["All"] + opponents)
     
     with col2:
-        successful = len(df[df['outcome'] == 'Successful'])
-        success_rate = (successful / total_actions * 100) if total_actions > 0 else 0
-        st.metric("Success Rate", f"{success_rate:.1f}%")
+        levels = list(set([m.get("level", "Unknown") for m in matches]))
+        selected_level = st.selectbox("Filter by Level", ["All"] + levels)
     
     with col3:
-        players = df['player'].nunique()
-        st.metric("Players", players)
+        formations_used = list(set([m.get("formation", "Unknown") for m in matches]))
+        selected_formation = st.selectbox("Filter by Formation", ["All"] + formations_used)
     
-    # Performance by half
-    if 'half' in df.columns:
-        st.subheader("Performance by Half")
-        half_stats = df.groupby('half').agg({
-            'player': 'count',
-            'outcome': lambda x: (x == 'Successful').mean() * 100
-        }).round(1)
-        half_stats.columns = ['Total Actions', 'Success Rate %']
-        st.dataframe(half_stats)
+    # Filter matches
+    filtered = matches
+    if selected_opponent != "All":
+        filtered = [m for m in filtered if m.get("opponent") == selected_opponent]
+    if selected_level != "All":
+        filtered = [m for m in filtered if m.get("level") == selected_level]
+    if selected_formation != "All":
+        filtered = [m for m in filtered if m.get("formation") == selected_formation]
     
-    # Export options
-    st.subheader("Export Data")
+    st.markdown("---")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        csv = df.to_csv(index=False)
-        st.download_button(
-            "📥 Download CSV",
-            csv,
-            file_name=f"match_stats_{match_data.get('timestamp', 'data')}.csv",
-            mime="text/csv"
-        )
-    
-    with col2:
-        json_str = json.dumps(match_data, indent=2)
-        st.download_button(
-            "📥 Download JSON",
-            json_str,
-            file_name=f"match_data_{match_data.get('timestamp', 'data')}.json",
-            mime="application/json"
-        )
-
-def display_player_reports():
-    """Generate individual player reports"""
-    # Load all match data
-    all_stats = []
-    match_files = [f for f in os.listdir(MATCH_DATA_DIR) if f.endswith('.json')]
-    
-    for match_file in match_files:
-        match_path = os.path.join(MATCH_DATA_DIR, match_file)
-        with open(match_path, 'r') as f:
-            match_data = json.load(f)
-            for stat in match_data.get('stats', []):
-                stat['match_date'] = match_data.get('timestamp', 'Unknown')
-                all_stats.append(stat)
-    
-    if not all_stats:
-        st.info("No player data available.")
-        return
-    
-    all_df = pd.DataFrame(all_stats)
-    
-    # Player selection
-    players = sorted(all_df['player'].unique())
-    selected_player = st.selectbox("Select Player", options=players)
-    
-    # Filter data for selected player
-    player_df = all_df[all_df['player'] == selected_player].copy()
-    
-    if player_df.empty:
-        st.info(f"No data available for {selected_player}.")
-        return
-    
-    # Player profile
-    st.subheader(f"Player Report: {selected_player}")
-    
-    # Calculate player stats
-    total_matches = player_df['match_date'].nunique()
-    total_actions = len(player_df)
-    successful_actions = len(player_df[player_df['outcome'] == 'Successful'])
-    success_rate = (successful_actions / total_actions * 100) if total_actions > 0 else 0
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Matches Played", total_matches)
-    with col2:
-        st.metric("Total Actions", total_actions)
-    with col3:
-        st.metric("Success Rate", f"{success_rate:.1f}%")
-    
-    # Action breakdown
-    st.subheader("Action Breakdown")
-    
-    # Most common actions
-    common_actions = player_df['action'].value_counts().head(10)
-    fig = px.bar(
-        x=common_actions.index,
-        y=common_actions.values,
-        title="Most Common Actions",
-        labels={'x': 'Action', 'y': 'Count'}
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Performance trend
-    if 'match_date' in player_df.columns:
-        st.subheader("Performance Trend")
+    # Display matches
+    for match in filtered:
+        date = datetime.fromisoformat(match["date"]).strftime("%Y-%m-%d %H:%M")
+        score = match.get("score", {"home": 0, "away": 0})
         
-        # Group by match date
-        player_df['date'] = pd.to_datetime(player_df['match_date'])
-        trend_df = player_df.groupby('date').agg({
-            'action': 'count',
-            'outcome': lambda x: (x == 'Successful').mean() * 100
-        }).round(1)
-        trend_df.columns = ['Actions', 'Success Rate %']
-        trend_df = trend_df.sort_index()
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=trend_df.index,
-            y=trend_df['Actions'],
-            name='Actions',
-            line=dict(color='blue')
-        ))
-        fig.add_trace(go.Scatter(
-            x=trend_df.index,
-            y=trend_df['Success Rate %'],
-            name='Success Rate %',
-            yaxis='y2',
-            line=dict(color='green', dash='dash')
-        ))
-        
-        fig.update_layout(
-            title='Performance Over Time',
-            yaxis=dict(title='Actions'),
-            yaxis2=dict(title='Success Rate %', overlaying='y', side='right')
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed statistics table
-    st.subheader("Detailed Statistics")
-    detailed_stats = player_df.groupby(['action', 'outcome']).size().unstack(fill_value=0)
-    st.dataframe(detailed_stats, use_container_width=True)
-
-# -------------------- DATA MANAGEMENT -------------------- #
-def load_team_data() -> Dict:
-    """Load team data from file"""
-    if os.path.exists(TEAM_FILE):
-        try:
-            with open(TEAM_FILE, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            st.error(f"Error loading team file: {e}")
-            return {"coach": "", "assistant": "", "players": []}
-    return {"coach": "", "assistant": "", "players": []}
-
-def save_team_data(team_data: Dict):
-    """Save team data to file"""
-    try:
-        with open(TEAM_FILE, 'w') as f:
-            json.dump(team_data, f, indent=2)
-        return True
-    except Exception as e:
-        st.error(f"Error saving team file: {e}")
-        return False
-
-def save_match_data():
-    """Save match data to JSON file"""
-    try:
-        match_data = {
-            "timestamp": datetime.now().isoformat(),
-            "coach": st.session_state.team_data.get('coach', ''),
-            "assistant": st.session_state.team_data.get('assistant', ''),
-            "formation": st.session_state.get('formation', '4-4-2'),
-            "level": st.session_state.match_level,
-            "duration": st.session_state.game_duration,
-            "lineup": st.session_state.lineup,
-            "substitutes": st.session_state.get('substitutes', []),
-            "opponent": st.session_state.get('opponent_team', ''),
-            "location": st.session_state.get('match_location', ''),
-            "weather": st.session_state.get('weather_conditions', ''),
-            "notes": st.session_state.get('match_notes', ''),
-            "stats": st.session_state.stats + st.session_state.first_half_stats + st.session_state.second_half_stats
-        }
-        
-        filename = f"match_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join(MATCH_DATA_DIR, filename)
-        
-        with open(filepath, 'w') as f:
-            json.dump(match_data, f, indent=2)
-        
-        st.success(f"Match data saved to {filename}")
-        return filename
-    except Exception as e:
-        st.error(f"Error saving match data: {e}")
-        return None
-
-def load_backup_interface():
-    """Interface for loading from backup"""
-    backup_files = [f for f in os.listdir(BACKUP_DIR) if f.startswith('team_backup_')]
-    
-    if backup_files:
-        selected_backup = st.selectbox(
-            "Select Backup File",
-            options=backup_files,
-            format_func=lambda x: x.replace('team_backup_', '').replace('.json', '')
-        )
-        
-        if st.button("Load Backup"):
-            backup_path = os.path.join(BACKUP_DIR, selected_backup)
-            with open(backup_path, 'r') as f:
-                team_data = json.load(f)
-            st.session_state.team_data = team_data
-            st.success("Backup loaded successfully!")
-            st.rerun()
-    else:
-        st.info("No backup files available.")
-
-# -------------------- HELPER FUNCTIONS -------------------- #
-def get_actions_per_level() -> Dict:
-    """Return actions per tracking level (unchanged from original)"""
-    return {
-        "Beginner": {
-            "All": ["Minutes played", "Touches", "Successful actions", "Unsuccessful actions", "Goals", "Assists"],
-            "Goalkeeper": ["Shots faced", "Saves", "Goals conceded"],
-            "Centre-Back": ["Tackles attempted", "Tackles won", "Clearances"],
-            "Full-Back": ["Tackles attempted", "Tackles won", "Clearances"],
-            "Defensive Midfielder": ["Passes attempted", "Passes completed", "Shots"],
-            "Central Midfielder": ["Passes attempted", "Passes completed", "Shots"],
-            "Attacking Midfielder": ["Passes attempted", "Passes completed", "Shots"],
-            "Winger": ["Shots", "Shots on target", "Goals"],
-            "Striker": ["Shots", "Shots on target", "Goals"]
-        },
-        "Intermediate": {
-            "All": ["Minutes played", "Touches", "Passes attempted", "Passes completed", "Ball losses", "Duels attempted", "Duels won"],
-            "Goalkeeper": ["Shots on target faced", "Saves", "Goals conceded", "Passes attempted", "Passes completed", "Long kicks attempted", "Long kicks completed"],
-            "Centre-Back": ["Tackles attempted", "Tackles won", "Interceptions", "Clearances", "Aerial duels attempted", "Aerial duels won", "Fouls conceded"],
-            "Full-Back": ["Tackles attempted", "Tackles won", "Interceptions", "Clearances", "Aerial duels attempted", "Aerial duels won", "Fouls conceded"],
-            "Defensive Midfielder": ["Passes completed", "Forward passes", "Ball recoveries", "Interceptions", "Shots", "Assists", "Key passes"],
-            "Central Midfielder": ["Passes completed", "Forward passes", "Ball recoveries", "Interceptions", "Shots", "Assists", "Key passes"],
-            "Attacking Midfielder": ["Passes completed", "Forward passes", "Ball recoveries", "Interceptions", "Shots", "Assists", "Key passes"],
-            "Winger": ["Shots", "Shots on target", "Goals", "Assists", "Dribbles attempted", "Dribbles completed", "Pressing actions"],
-            "Striker": ["Shots", "Shots on target", "Goals", "Assists", "Dribbles attempted", "Dribbles completed", "Pressing actions"]
-        },
-        "Semi-Pro": {
-            "All": ["Successful actions", "Unsuccessful actions", "Duels won", "Duels lost", "Ball losses by zone", "Pressing actions", "Successful presses"],
-            "Goalkeeper": ["Shots on target faced", "Saves", "Goals conceded", "Crosses faced", "Crosses claimed", "Crosses punched", "Long passes completed", "Errors leading to shot"],
-            "Centre-Back": ["Defensive duels attempted", "Defensive duels won", "Aerial duels attempted", "Aerial duels won", "Blocks", "Clearances", "Progressive passes", "Errors leading to shot"],
-            "Full-Back": ["Tackles won", "Interceptions", "Overlaps", "Crosses attempted", "Crosses completed", "Touches in final third", "Recovery runs"],
-            "Defensive Midfielder": ["Ball recoveries", "Interceptions", "Tackles won", "Passes under pressure", "Forward passes completed", "Fouls conceded"],
-            "Central Midfielder": ["Progressive passes", "Key passes", "Chances created", "Dribbles completed", "Shots", "Assists"],
-            "Attacking Midfielder": ["Progressive passes", "Key passes", "Chances created", "Dribbles completed", "Shots", "Assists"],
-            "Winger": ["Shots", "Shots on target", "Goals", "Big chances missed", "Touches in box", "Successful presses (final third)", "Offsides"],
-            "Striker": ["Shots", "Shots on target", "Goals", "Big chances missed", "Touches in box", "Successful presses (final third)", "Offsides"]
-        },
-        "Pro": {
-            "All": ["Actions per 90", "Success rate by zone", "Press resistance actions", "Ball losses under pressure", "Contribution to goal sequences"],
-            "Goalkeeper": ["Shots on target faced", "Saves", "Goals conceded", "PSxG / xG prevented", "Cross claim success", "Distribution leading to shot", "Sweeper actions"],
-            "Centre-Back": ["Defensive actions per 90", "Line-breaking passes", "Progressive carries", "Recovery runs", "Errors leading to goal"],
-            "Full-Back": ["Progressive runs", "Crosses into danger area", "Assists", "Defensive recoveries", "Pressing success rate"],
-            "Defensive Midfielder": ["Progressive passes", "Progressive carries", "Passes under pressure", "Key passes", "Expected assists (xA)", "Tempo-control actions"],
-            "Central Midfielder": ["Progressive passes", "Progressive carries", "Passes under pressure", "Key passes", "Expected assists (xA)", "Tempo-control actions"],
-            "Attacking Midfielder": ["Progressive passes", "Progressive carries", "Passes under pressure", "Key passes", "Expected assists (xA)", "Tempo-control actions"],
-            "Winger": ["Shots by zone", "Expected goals (xG)", "Non-penalty goals", "Shot conversion rate", "Pressing intensity", "Off-ball runs leading to shots"],
-            "Striker": ["Shots by zone", "Expected goals (xG)", "Non-penalty goals", "Shot conversion rate", "Pressing intensity", "Off-ball runs leading to shots"]
-        }
-    }
-
-role_groups = {
-    'GK': 'Goalkeeper',
-    'CB': 'Centre-Back',
-    'RCB': 'Centre-Back',
-    'LCB': 'Centre-Back',
-    'RB': 'Full-Back',
-    'LB': 'Full-Back',
-    'WB': 'Full-Back',
-    'RWB': 'Full-Back',
-    'LWB': 'Full-Back',
-    'DM': 'Defensive Midfielder',
-    'CDM': 'Defensive Midfielder',
-    'CM': 'Central Midfielder',
-    'AM': 'Attacking Midfielder',
-    'CAM': 'Attacking Midfielder',
-    'RM': 'Winger',
-    'LM': 'Winger',
-    'WM': 'Winger',
-    'RW': 'Winger',
-    'LW': 'Winger',
-    'ST': 'Striker',
-    'CF': 'Striker',
-    'SS': 'Striker',
-    'WF': 'Striker'
-}
+        with st.expander(f"**{date}** vs {match.get('opponent', 'Unknown')} - {score['home']}:{score['away']}", expanded=False):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Formation", match.get("formation", "N/A"))
+            with col2:
+                st.metric("Level", match.get("level", "N/A"))
+            with col3:
+                duration = int(match.get("duration", 0))
+                st.metric("Duration", f"{duration//60}:{duration%60:02d}")
+            with col4:
+                result = "Win" if score["home"] > score["away"] else "Loss" if score["home"] < score["away"] else "Draw"
+                st.metric("Result", result)
+            
+            # Stats summary
+            if match.get("stats"):
+                df = pd.DataFrame(match["stats"])
+                st.subheader("Match Statistics")
+                
+                player_stats = df.groupby('player').agg({
+                    'action': 'count',
+                    'outcome': lambda x: (x == 'Successful').sum()
+                }).rename(columns={'action': 'Total Actions', 'outcome': 'Successful'})
+                player_stats['Success %'] = (player_stats['Successful'] / player_stats['Total Actions'] * 100).round(1)
+                
+                st.dataframe(player_stats, use_container_width=True)
+            
+            # Download match data
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(f"📥 Download JSON", key=f"json_{match['filename']}"):
+                    json_str = json.dumps(match, indent=2)
+                    st.download_button("Download", json_str, f"{match['filename']}", use_container_width=True)
+            
+            with col2:
+                if match.get("stats"):
+                    csv = pd.DataFrame(match["stats"]).to_csv(index=False)
+                    st.download_button("📥 Download CSV", csv, f"{match['filename'].replace('.json', '.csv')}", 
+                                     "text/csv", use_container_width=True)
 
 # -------------------- MAIN APP -------------------- #
 def main():
-    """Main application entry point"""
-    # Page configuration
-    st.set_page_config(
-        page_title="Takti Stats Tracker",
-        page_icon="⚽",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Load CSS
-    load_custom_css()
-    
     # Initialize session state
-    initialize_session_state()
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
     
-    # Check session timeout
-    if st.session_state.logged_in:
-        check_session_timeout()
-    
-    # Main app logic
     if not st.session_state.logged_in:
-        login_page()
-    else:
-        # Sidebar
-        with st.sidebar:
-            st.title("⚽ Takti Stats")
-            st.markdown("---")
-            
-            # User info
-            st.write(f"👤 Logged in as: **dreamteam**")
-            
-            # Navigation
-            st.subheader("Navigation")
-            
-            # Create tabs in sidebar for better navigation
-            page = st.radio(
-                "Go to:",
-                ["👥 Team Sheet", "🎯 Lineup", "⚙️ Match Settings", "📝 Live Match", "📈 Analytics", "⚙️ Settings"],
-                label_visibility="collapsed"
-            )
-            
-            st.markdown("---")
-            
-            # Match info if in progress
-            if st.session_state.match_started:
-                st.info("📊 Match in Progress")
-                mins = int(st.session_state.elapsed_time // 60)
-                secs = int(st.session_state.elapsed_time % 60)
-                st.write(f"⏱️ {mins:02d}:{secs:02d}")
-                st.write(f"📊 {len(st.session_state.stats)} actions logged")
-            
-            # Logout button
-            if st.button("🚪 Logout", use_container_width=True):
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.rerun()
-            
-            st.markdown("---")
-            st.caption(f"v1.2.0 | © {datetime.now().year} Takti Stats")
+        login()
+        return
+    
+    # Sidebar
+    with st.sidebar:
+        st.title("⚽ Takti Stats")
+        st.markdown(f"**User:** {st.session_state.get('username', 'User')}")
+        st.markdown("---")
         
-        # Main content area
-        if page == "👥 Team Sheet":
-            team_sheet_page()
+        if st.button("🚪 Logout", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
         
-        elif page == "🎯 Lineup":
-            lineup_selection_page()
+        st.markdown("---")
+        st.markdown("### Quick Stats")
         
-        elif page == "⚙️ Match Settings":
-            match_settings_page()
+        matches = load_all_matches()
+        st.metric("Total Matches", len(matches))
         
-        elif page == "📝 Live Match":
-            if not st.session_state.get('match_ready', False):
-                st.warning("⚠️ Please complete Match Settings first.")
-                st.info("Go to Match Settings tab and click 'Proceed to Live Match'")
-            else:
-                # Timer
-                timer = MatchTimer()
-                timer.control_panel()
-                mins, secs = timer.display()
-                
-                # Action logging
-                action_logging_page()
-                
-                # Export options
-                if st.session_state.stats:
-                    st.markdown("---")
-                    st.subheader("💾 Export Options")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        if st.button("💾 Save Match Data", use_container_width=True):
-                            filename = save_match_data()
-                            if filename:
-                                st.success(f"Match saved: {filename}")
-                    
-                    with col2:
-                        df = pd.DataFrame(st.session_state.stats)
-                        csv = df.to_csv(index=False)
-                        st.download_button(
-                            "📥 Download CSV",
-                            csv,
-                            file_name="live_match_stats.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-                    
-                    with col3:
-                        if st.button("🏁 End Match", use_container_width=True, type="primary"):
-                            timer._handle_match_end()
-                            st.success("Match ended. Data saved.")
-                            st.rerun()
-        
-        elif page == "📈 Analytics":
-            analytics_page()
-        
-        elif page == "⚙️ Settings":
-            settings_page()
+        if matches:
+            wins = sum(1 for m in matches if m.get("score", {}).get("home", 0) > m.get("score", {}).get("away", 0))
+            st.metric("Wins", wins)
+    
+    # Main tabs
+    tabs = st.tabs(["📋 Team Sheet", "📝 Lineup", "⚙️ Match Settings", "⚽ Live Match", "📚 History"])
+    
+    with tabs[0]:
+        team_data = team_sheet()
+        st.session_state.team_data = team_data
+    
+    with tabs[1]:
+        if "team_data" in st.session_state and st.session_state.team_data.get("players"):
+            result = lineup_selection(st.session_state.team_data)
+            if result:
+                lineup, subs, opponent = result
+                st.session_state.lineup = lineup
+                st.session_state.subs = subs
+                st.session_state.opponent = opponent
+        else:
+            st.warning("⚠️ Please complete Team Sheet first.")
+    
+    with tabs[2]:
+        match_settings()
+    
+    with tabs[3]:
+        live_match()
+    
+    with tabs[4]:
+        match_history()
 
-def settings_page():
-    """Application settings page"""
-    st.header("⚙️ Application Settings")
-    
-    tab1, tab2, tab3 = st.tabs(["General", "Data Management", "About"])
-    
-    with tab1:
-        st.subheader("General Settings")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            auto_save = st.checkbox("Enable Auto-save", value=True)
-            backup_interval = st.selectbox(
-                "Backup Interval",
-                options=["5 minutes", "15 minutes", "30 minutes", "1 hour"],
-                index=1
-            )
-        
-        with col2:
-            default_level = st.selectbox(
-                "Default Tracking Level",
-                options=["Beginner", "Intermediate", "Semi-Pro", "Pro"],
-                index=0
-            )
-            default_duration = st.number_input(
-                "Default Match Duration (min)",
-                min_value=40,
-                max_value=120,
-                value=90
-            )
-        
-        if st.button("💾 Save Settings", use_container_width=True):
-            st.success("Settings saved!")
-    
-    with tab2:
-        st.subheader("Data Management")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Team Data**")
-            if os.path.exists(TEAM_FILE):
-                file_size = os.path.getsize(TEAM_FILE)
-                st.write(f"File size: {file_size / 1024:.1f} KB")
-                
-                if st.button("🗑️ Clear Team Data", use_container_width=True):
-                    if os.path.exists(TEAM_FILE):
-                        os.remove(TEAM_FILE)
-                    st.session_state.team_data = {"coach": "", "assistant": "", "players": []}
-                    st.success("Team data cleared!")
-                    st.rerun()
-            else:
-                st.info("No team data file found.")
-        
-        with col2:
-            st.write("**Match Data**")
-            match_files = [f for f in os.listdir(MATCH_DATA_DIR) if f.endswith('.json')]
-            st.write(f"Matches stored: {len(match_files)}")
-            
-            if match_files:
-                if st.button("🗑️ Clear All Match Data", use_container_width=True):
-                    for file in match_files:
-                        os.remove(os.path.join(MATCH_DATA_DIR, file))
-                    st.success("All match data cleared!")
-                    st.rerun()
-        
-        st.subheader("Import/Export")
-        
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            uploaded_file = st.file_uploader("Import Team Data", type=['json'])
-            if uploaded_file is not None:
-                try:
-                    team_data = json.load(uploaded_file)
-                    save_team_data(team_data)
-                    st.session_state.team_data = team_data
-                    st.success("Team data imported successfully!")
-                except Exception as e:
-                    st.error(f"Import failed: {e}")
-        
-        with col4:
-            if os.path.exists(TEAM_FILE):
-                with open(TEAM_FILE, 'r') as f:
-                    team_json = f.read()
-                
-                st.download_button(
-                    "📤 Export Team Data",
-                    team_json,
-                    file_name="team_data_export.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-    
-    with tab3:
-        st.subheader("About Takti Stats Tracker")
-        
-        st.write("""
-        ### ⚽ Takti Stats Tracker v1.2.0
-        
-        A comprehensive soccer statistics tracking application designed for youth and amateur teams.
-        
-        **Features:**
-        - 👥 Team roster management
-        - 🎯 Formation and lineup selection
-        - 📝 Real-time match statistics tracking
-        - 📊 Advanced analytics and reporting
-        - 💾 Data export and backup
-        
-        **Tracking Levels:**
-        1. **Beginner**: Basic actions for young players
-        2. **Intermediate**: More detailed statistics
-        3. **Semi-Pro**: Advanced metrics
-        4. **Pro**: Professional-level analytics
-        
-        **System Requirements:**
-        - Python 3.8+
-        - Streamlit
-        - Modern web browser
-        
-        **License:**
-        © 2024 Takti Stats. All rights reserved.
-        
-        For support or feature requests, please contact the development team.
-        """)
-        
-        st.info("🔒 **Security Note**: Change default password in production deployment.")
-
-# -------------------- APPLICATION START -------------------- #
 if __name__ == "__main__":
     main()
