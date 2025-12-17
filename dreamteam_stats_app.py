@@ -8,6 +8,8 @@ import time
 import hashlib
 
 st.set_page_config(page_title="DreamTeam Stats Tracker", layout="wide")
+load_css()
+
 import streamlit as st
 
 
