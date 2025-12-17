@@ -6,6 +6,11 @@ from datetime import datetime
 from fpdf import FPDF
 import time
 import hashlib
+from collections import defaultdict
+
+def load_css():
+    with open("style.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 st.set_page_config(page_title="DreamTeam Stats Tracker", layout="wide")
 load_css()
