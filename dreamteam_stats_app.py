@@ -176,28 +176,96 @@ def get_actions_per_level():
     }
 
 # -------------------- LOGIN -------------------- #
+
 def login():
-    st.title("⚽ Takti Stats Tracker")
-    st.markdown("### Professional Football Statistics Management")
-    
+    # Inspirational full-screen background with dark overlay for better text readability
+    # Selected a high-quality, emotional youth soccer mentoring image to evoke connection and passion
+    background_url = "https://d3rqy6w6tyyf68.cloudfront.net/AcuCustom/Sitename/DAM/099/motivate-young-players-1.png"  # Coach talking to young player
+
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url({background_url});
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }}
+        .overlay {{
+            background-color: rgba(0, 0, 0, 0.5);
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: -1;
+        }}
+        .login-container {{
+            background-color: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            max-width: 450px;
+            margin: 0 auto;
+        }}
+        </style>
+        <div class="overlay"></div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Centered content with vertical spacing
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("---")
-        username = st.text_input("Username", placeholder="Enter username")
-        password = st.text_input("Password", type="password", placeholder="Enter password")
-        
-        if st.button("🔐 Login", use_container_width=True):
-            hashed_input = hashlib.sha256(password.encode()).hexdigest()
-            if username == "dreamteam" and hashed_input == HASHED_PASSWORD:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.success("Login successful!")
-                st.rerun()
-            else:
-                st.error("❌ Invalid credentials")
-        
-        st.markdown("---")
-        st.info("💡 Default credentials: dreamteam / 1234567")
+        st.markdown(
+            """
+            <div class="login-container">
+                <h1 style="text-align: center; color: white; font-size: 48px; margin-bottom: 0;">
+                    ⚽ TAKTI
+                </h1>
+                <h1 style="text-align: center; color: white; font-size: 36px; margin-top: 0; letter-spacing: 2px;">
+                    STATS TRACKER
+                </h1>
+                <p style="text-align: center; color: #ffffff; font-size: 20px; margin-bottom: 40px;">
+                    Analyze. Improve. Win.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Login form inside the glass-morphic card
+        with st.container():
+            st.markdown("<div class='login-container'>", unsafe_allow_html=True)
+
+            username = st.text_input(
+                "Username",
+                placeholder="Enter your username",
+                label_visibility="collapsed"
+            )
+            password = st.text_input(
+                "Password",
+                type="password",
+                placeholder="Enter your password",
+                label_visibility="collapsed"
+            )
+
+            if st.button("🔐 Login", use_container_width=True, type="primary"):
+                hashed_input = hashlib.sha256(password.encode()).hexdigest()
+                if username == "dreamteam" and hashed_input == HASHED_PASSWORD:
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success("✅ Login successful! Welcome back.")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid username or password")
+
+            st.markdown("---")
+            st.caption("💡 **Demo credentials:** `dreamteam` / `1234567`")
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
 
 # -------------------- TEAM SHEET -------------------- #
 def team_sheet():
