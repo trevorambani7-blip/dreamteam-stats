@@ -1,5 +1,5 @@
 streamlit
 pandas
 fpdf
-streamlit-mic-recorder==0.0.8
+streamlit-mic-recorder  
 openpyxl
