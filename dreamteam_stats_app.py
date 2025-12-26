@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 import os
 import json
-import time
 import hashlib
-from streamlit_mic_recorder import speech_to_text
 from datetime import datetime
+from streamlit_mic_recorder import speech_to_text
 
 # ---------------------- PAGE CONFIG ----------------------
 st.set_page_config(page_title="Takti Stats Tracker", layout="centered")
@@ -14,73 +13,50 @@ st.set_page_config(page_title="Takti Stats Tracker", layout="centered")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "data_rows" not in st.session_state:
-    st.session_state.data_rows = []  # Stores filtered commentary rows
-if "recording_active" not in st.session_state:
-    st.session_state.recording_active = False
+    st.session_state.data_rows = []
 
 # ---------------------- PASSWORD ----------------------
 HASHED_PASSWORD = hashlib.sha256("1234567".encode()).hexdigest()
 
-# ---------------------- KEYWORD BANK ----------------------
+# ---------------------- KEYWORDS ----------------------
 KEYWORDS = {
-    "shot", "shoots", "fires", "strikes", "header", "volley", "curls", "blasts", "taps in", "finishes", "scores", "goal",
-    "on target", "off target", "wide", "over the bar", "saved", "blocked",
-    "assist", "cross", "through ball", "cut-back", "sets up",
-    "pass", "long ball", "switch", "diagonal", "intercepted",
-    "dribble", "beats", "takes on", "skips past",
-    "tackle", "interception", "block", "clearance", "foul",
-    "progressive", "carries", "drives forward", "final third", "breaks lines",
-    "left wing", "right wing", "edge of the box", "inside the box",
-    "run", "makes a run", "ghosts in", "in behind",
-    "high press", "counter-attack", "compact", "high line",
-    "sprint", "bursts", "covers ground", "tracks back", "relentless",
-    "tired", "leggy", "fading", "heavy legs",
-    "dominating", "in control", "camped in",
-    "under pressure", "composed", "clinical"
+    "shot","shoots","fires","strikes","header","volley","scores","goal",
+    "assist","cross","pass","through","tackle","interception","clearance",
+    "dribble","beats","run","press","counter","wide","saved","blocked"
 }
-KEYWORDS = {kw.lower() for kw in KEYWORDS}
+KEYWORDS = {k.lower() for k in KEYWORDS}
 
-# ---------------------- TEAM SHEET FUNCTIONS ----------------------
+# ---------------------- TEAM FILE ----------------------
 TEAM_FILE = "team_data.json"
 
 def load_team():
     if os.path.exists(TEAM_FILE):
-        try:
-            with open(TEAM_FILE, "r") as f:
-                return json.load(f)
-        except:
-            return {"coach": "", "assistant": "", "players": []}
+        with open(TEAM_FILE, "r") as f:
+            return json.load(f)
     return {"coach": "", "assistant": "", "players": []}
 
-def save_team(data):
+def save_team(team):
     with open(TEAM_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(team, f)
 
 def get_player_names():
     team = load_team()
-    return {p["name"].strip().lower() for p in team["players"] if p["name"].strip()}
+    return {p["name"].lower() for p in team["players"] if p["name"].strip()}
 
-# ---------------------- LOGIN PAGE ----------------------
+# ---------------------- LOGIN ----------------------
 def login_page():
     st.title("⚽ Takti Stats Tracker")
-    st.markdown("### Professional Football Statistics Management")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("---")
-        username = st.text_input("Username", placeholder="e.g. dreamteam")
-        password = st.text_input("Password", type="password", placeholder="Enter password")
+    if st.button("Login"):
+        if username == "dreamteam" and hashlib.sha256(password.encode()).hexdigest() == HASHED_PASSWORD:
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Invalid credentials")
 
-        if st.button("🔐 Login", use_container_width=True):
-            if username == "dreamteam" and hashlib.sha256(password.encode()).hexdigest() == HASHED_PASSWORD:
-                st.session_state.logged_in = True
-                st.success("Login successful! Welcome to Takti Stats.")
-                st.rerun()
-            else:
-                st.error("❌ Invalid credentials")
-
-        st.markdown("---")
-        st.info("💡 Default: **dreamteam** / **1234567**")
+    st.info("Default: dreamteam / 1234567")
 
 # ---------------------- MAIN APP ----------------------
 def main_app():
@@ -89,128 +65,90 @@ def main_app():
 
     PLAYERS = get_player_names()
 
+    # -------- TEAM SHEET --------
     if page == "Team Sheet":
-        st.header("📋 Team Sheet Setup")
+        st.header("📋 Team Sheet")
+
         team = load_team()
+        team["coach"] = st.text_input("Coach", team["coach"])
+        team["assistant"] = st.text_input("Assistant", team["assistant"])
 
-        team["coach"] = st.text_input("Coach Name", value=team.get("coach", ""))
-        team["assistant"] = st.text_input("Assistant Coach", value=team.get("assistant", ""))
+        num_players = st.number_input("Number of Players", 11, 30, max(11, len(team["players"])))
+        positions = ["GK","CB","RB","LB","DM","CM","AM","RW","LW","ST"]
 
-        num_players = st.number_input("Squad Size", min_value=11, max_value=30, value=max(18, len(team.get("players", []))))
-        positions = ['GK','CB','RCB','LCB','RB','LB','WB','RWB','LWB','DM','CDM','CM','AM','CAM','RM','LM','WM','RW','LW','ST','CF','SS','WF']
-
-        new_players = []
-        used_jerseys = set()
-
+        players = []
         for i in range(num_players):
-            col1, col2, col3 = st.columns([4, 2, 3])
-            with col1:
-                name = st.text_input("Player Name", key=f"name_{i}")
-            with col2:
-                jersey = st.text_input("Jersey #", key=f"jersey_{i}", max_chars=3)
-            with col3:
-                pos = st.selectbox("Position", positions, key=f"pos_{i}")
+            col1, col2, col3 = st.columns(3)
+            name = col1.text_input("Name", key=f"name{i}")
+            jersey = col2.text_input("Jersey", key=f"jersey{i}")
+            pos = col3.selectbox("Position", positions, key=f"pos{i}")
 
-            if name.strip():
-                if jersey and jersey in used_jerseys:
-                    st.error(f"Jersey {jersey} already used!")
-                else:
-                    if jersey:
-                        used_jerseys.add(jersey)
-                    new_players.append({"name": name.strip(), "jersey": jersey, "position": pos})
+            if name:
+                players.append({"name": name, "jersey": jersey, "position": pos})
 
-        team["players"] = new_players
+        team["players"] = players
 
-        if st.button("💾 Save Team Sheet"):
+        if st.button("Save Team"):
             save_team(team)
-            st.success("Team sheet saved successfully!")
-            st.rerun()
+            st.success("Team saved")
 
-        if team["players"]:
-            st.write("### Current Squad")
-            df = pd.DataFrame(team["players"])
-            st.dataframe(df[["name", "jersey", "position"]], use_container_width=True)
+        if players:
+            st.dataframe(pd.DataFrame(players), use_container_width=True)
 
+    # -------- MATCH TRACKER --------
     elif page == "Match Tracker":
-        st.header("🎙️ Live Commentary Tracker")
+        st.header("🎙️ Live Commentary")
 
-        col1, col2 = st.columns(2)
-        half_mins = col1.number_input("Half Length (minutes)", min_value=1, value=45)
-        halftime_mins = col2.number_input("Halftime Duration (minutes)", min_value=0, value=15)
-
-        total_minutes = (half_mins * 2) + halftime_mins
-        st.info(f"Match will be tracked for **{total_minutes} minutes** (2 × {half_mins}' + {halftime_mins}' halftime)")
-
-        # Live table
-        table_placeholder = st.empty()
-        export_placeholder = st.empty()
-
-        # Mic recorder
-        st.markdown("### Speak Commentary Below")
+        st.markdown("### Speak commentary")
         text = speech_to_text(
             language="en",
             use_container_width=True,
             just_once=False,
-            key="commentary_recorder"
+            key="mic"
         )
 
+        table_placeholder = st.empty()
+
         if text:
-            words = text.lower().split()
-            filtered = [word for word in words if word in KEYWORDS or word in PLAYERS]
+            text = text.lower()
+            words = text.split()
+            filtered = [w for w in words if w in KEYWORDS or w in PLAYERS]
 
             if filtered:
                 now = datetime.now()
-                match_time = now.strftime("%M:%S")  # Simple elapsed-style time; enhance later if needed
-                real_time = now.strftime("%H:%M:%S")
-
-                row = {
-                    "Match Time": match_time,
-                    "Real Time": real_time,
+                st.session_state.data_rows.append({
+                    "Match Time": now.strftime("%M:%S"),
+                    "Real Time": now.strftime("%H:%M:%S"),
                     "Filtered Words": " ".join(filtered),
                     "Full Phrase": text
-                }
-                st.session_state.data_rows.append(row)
+                })
 
-                # Update live table
-                df = pd.DataFrame(st.session_state.data_rows)
-                table_placeholder.dataframe(df, use_container_width=True)
-
-        # Show current data
         if st.session_state.data_rows:
             df = pd.DataFrame(st.session_state.data_rows)
             table_placeholder.dataframe(df, use_container_width=True)
 
-            # Export options
-            csv = df.to_csv(index=False).encode('utf-8')
-            excel_buffer = pd.ExcelWriter("commentary_data.xlsx", engine='openpyxl')
-            df.to_excel(excel_buffer, index=False)
-            excel_buffer.seek(0)
-            excel_data = excel_buffer.getvalue()
-
-            col1, col2 = export_placeholder.columns(2)
+            col1, col2 = st.columns(2)
             col1.download_button(
-                label="📄 Download CSV",
-                data=csv,
-                file_name=f"commentary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv"
+                "Download CSV",
+                df.to_csv(index=False).encode(),
+                "commentary.csv",
+                "text/csv"
             )
-            col2.download_button(
-                label="📊 Download Excel",
-                data=excel_data,
-                file_name=f"commentary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            excel = pd.ExcelWriter("commentary.xlsx", engine="openpyxl")
+            df.to_excel(excel, index=False)
+            excel.close()
+            with open("commentary.xlsx", "rb") as f:
+                col2.download_button("Download Excel", f, "commentary.xlsx")
 
-        if st.button("🗑️ Clear All Data"):
+        if st.button("Clear Data"):
             st.session_state.data_rows = []
             st.rerun()
 
-    # Logout
-    if st.sidebar.button("🚪 Logout"):
+    if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
         st.rerun()
 
-# ---------------------- RUN APP ----------------------
+# ---------------------- RUN ----------------------
 if not st.session_state.logged_in:
     login_page()
 else:
