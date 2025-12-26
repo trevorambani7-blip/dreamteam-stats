@@ -4,7 +4,8 @@ import os
 import json
 import hashlib
 from datetime import datetime
-from streamlit_mic_recorder import speech_to_text  # This has the correct function!
+import io  # For Excel download fix
+from streamlit_mic_recorder import speech_to_text
 
 # ---------------------- PAGE CONFIG ----------------------
 st.set_page_config(page_title="Takti Stats Tracker", layout="centered")
@@ -67,45 +68,47 @@ def main_app():
     if page == "Team Sheet":
         st.header("📋 Team Sheet")
         team = load_team()
-        team["coach"] = st.text_input("Coach", team["coach"])
-        team["assistant"] = st.text_input("Assistant", team["assistant"])
-        num_players = st.number_input("Number of Players", 11, 30, max(11, len(team["players"])))
+        team["coach"] = st.text_input("Coach", value=team["coach"])
+        team["assistant"] = st.text_input("Assistant", value=team["assistant"])
+        num_players = st.number_input("Number of Players", min_value=11, max_value=30, value=max(11, len(team["players"])))
         positions = ["GK","CB","RB","LB","DM","CM","AM","RW","LW","ST"]
         players = []
         for i in range(num_players):
             col1, col2, col3 = st.columns(3)
-            name = col1.text_input("Name", key=f"name{i}")
-            jersey = col2.text_input("Jersey", key=f"jersey{i}")
-            pos = col3.selectbox("Position", positions, key=f"pos{i}")
+            default_name = team["players"][i]["name"] if i < len(team["players"]) else ""
+            default_jersey = team["players"][i]["jersey"] if i < len(team["players"]) else ""
+            default_pos = team["players"][i]["position"] if i < len(team["players"]) else positions[0]
+            name = col1.text_input("Name", value=default_name, key=f"name{i}")
+            jersey = col2.text_input("Jersey", value=default_jersey, key=f"jersey{i}")
+            pos = col3.selectbox("Position", positions, index=positions.index(default_pos) if default_pos in positions else 0, key=f"pos{i}")
             if name.strip():
                 players.append({"name": name, "jersey": jersey, "position": pos})
         team["players"] = players
         if st.button("Save Team"):
             save_team(team)
-            st.success("Team saved")
+            st.success("Team saved!")
         if players:
             st.dataframe(pd.DataFrame(players), use_container_width=True)
 
     # -------- MATCH TRACKER --------
     elif page == "Match Tracker":
         st.header("🎙️ Live Commentary Tracker")
-        st.markdown("### Click the mic → Allow permission → Speak your commentary → Click again to stop")
+        st.markdown("### Click the mic → Allow permission → Speak commentary → Click to stop")
 
-        # Browser-based real-time speech-to-text (no API key!)
         text = speech_to_text(
-            language="en",                  # Change to 'es' for Spanish, 'fr' for French, etc.
-            use_container_width=True,
-            just_once=False,                # Keeps listening across reruns
+            language="en",  # Change to 'es', 'fr', etc. for other languages
             start_prompt="🎤 Start Recording",
             stop_prompt="⏹️ Stop Recording",
+            just_once=False,
+            use_container_width=True,
             key="commentary_stt"
         )
 
         table_placeholder = st.empty()
 
         if text:
-            text = text.lower()
-            words = text.split()
+            text_lower = text.lower()
+            words = text_lower.split()
             filtered = [w for w in words if w in KEYWORDS or w in PLAYERS]
             if filtered:
                 now = datetime.now()
@@ -113,11 +116,10 @@ def main_app():
                     "Match Time": now.strftime("%M:%S"),
                     "Real Time": now.strftime("%H:%M:%S"),
                     "Filtered Words": " ".join(filtered),
-                    "Full Phrase": text.capitalize()  # Show original phrase nicely
+                    "Full Phrase": text  # Keep original capitalization
                 })
                 st.success(f"Captured: {' '.join(filtered)}")
 
-        # Display table and downloads
         if st.session_state.data_rows:
             df = pd.DataFrame(st.session_state.data_rows)
             table_placeholder.dataframe(df, use_container_width=True)
@@ -131,10 +133,9 @@ def main_app():
             )
 
             # Fixed Excel download
-            import io
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Stats")
+                df.to_excel(writer, index=False, sheet_name="Commentary")
             excel_buffer.seek(0)
             col2.download_button(
                 "Download Excel",
