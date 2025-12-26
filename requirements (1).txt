@@ -2,3 +2,4 @@ streamlit
 pandas
 fpdf
 streamlit-mic-recorder
+openpyxl
